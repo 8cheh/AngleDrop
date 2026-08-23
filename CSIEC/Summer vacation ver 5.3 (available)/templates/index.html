@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cadrop · 接触角测量</title>
+<style>
+  :root {
+    --bg: #0f1218; --panel: #171c26; --panel2: #1e2533; --line: #2a3346;
+    --fg: #e8ecf4; --muted: #93a0b8; --accent: #4da3ff; --accent2: #3f6cff;
+    --ok: #3ddc97; --warn: #ffb84d; --err: #ff6b6b;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg); color: var(--fg);
+    font: 14px/1.5 system-ui, "Segoe UI", "Microsoft YaHei", sans-serif;
+    display: flex; height: 100vh; overflow: hidden;
+  }
+  .sidebar { width: 300px; min-width: 300px; background: var(--panel);
+    border-right: 1px solid var(--line); display: flex; flex-direction: column; }
+  .sidebar h1 { font-size: 16px; padding: 14px 16px 4px; margin: 0; }
+  .sidebar .sub { color: var(--muted); font-size: 11px; padding: 0 16px 10px; }
+  .upload {
+    margin: 4px 12px 10px; padding: 16px 10px; text-align: center;
+    border: 1.5px dashed var(--line); border-radius: 8px; color: var(--muted);
+    cursor: pointer; transition: .15s; font-size: 13px;
+  }
+  .upload:hover, .upload.drag { border-color: var(--accent); color: var(--accent); background: var(--panel2); }
+  .upload b { color: var(--fg); }
+  .upload input { display: none; }
+  .search { margin: 0 12px 10px; padding: 8px 10px; background: var(--panel2);
+    border: 1px solid var(--line); border-radius: 6px; color: var(--fg); width: calc(100% - 24px); }
+  .thumbs { flex: 1; overflow-y: auto; padding: 2px 8px 12px; }
+  .thumb { display: flex; gap: 8px; align-items: center; padding: 5px 6px;
+    border-radius: 6px; cursor: pointer; border: 1px solid transparent; }
+  .thumb:hover { background: var(--panel2); }
+  .thumb.active { background: var(--panel2); border-color: var(--accent); }
+  .thumb img { width: 46px; height: 34px; object-fit: cover; border-radius: 3px; background: #000; }
+  .thumb .nm { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+  .thumb .del { color: var(--muted); cursor: pointer; padding: 0 4px; }
+  .thumb .del:hover { color: var(--err); }
+  .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .topbar { padding: 10px 16px; border-bottom: 1px solid var(--line); display: flex;
+    gap: 10px; align-items: center; flex-wrap: wrap; background: var(--panel); }
+  select, button { font: inherit; }
+  select { background: var(--panel2); color: var(--fg); border: 1px solid var(--line);
+    padding: 7px 10px; border-radius: 6px; }
+  button { background: var(--accent); color: #06111f; border: none; padding: 7px 14px;
+    border-radius: 6px; cursor: pointer; font-weight: 600; }
+  button.ghost { background: var(--panel2); color: var(--fg); border: 1px solid var(--line); }
+  button.active { background: var(--accent2); color: #fff; }
+  button:disabled { opacity: .45; cursor: default; }
+  .chk { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; }
+  .hint { color: var(--muted); font-size: 12px; }
+  .stage { flex: 1; display: flex; min-height: 0; }
+  .canvas-wrap { flex: 1; display: flex; align-items: center; justify-content: center;
+    background: #0a0d12; padding: 12px; overflow: hidden; position: relative; }
+  canvas { max-width: 100%; max-height: 100%; border-radius: 4px; box-shadow: 0 4px 24px rgba(0,0,0,.5); }
+  canvas.selecting { cursor: crosshair; }
+  .side-panel { width: 340px; min-width: 300px; border-left: 1px solid var(--line);
+    background: var(--panel); overflow-y: auto; padding: 14px 16px; }
+  .section-title { font-size: 12px; color: var(--muted); text-transform: uppercase;
+    letter-spacing: .06em; margin: 18px 0 6px; }
+  .big { font-size: 40px; font-weight: 700; text-align: center; margin: 4px 0; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 12px 0; }
+  .card { background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 10px; }
+  .card .lbl { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+  .card .val { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .metric { display: flex; justify-content: space-between; padding: 7px 0; border-bottom: 1px dashed var(--line); }
+  .metric b { font-variant-numeric: tabular-nums; }
+  .ok-tag { color: var(--ok); } .warn-tag { color: var(--warn); } .err-tag { color: var(--err); }
+  .progress { height: 8px; background: var(--panel2); border-radius: 4px; overflow: hidden; margin-top: 6px; }
+  .progress > div { height: 100%; background: var(--accent); width: 0; transition: width .2s; }
+  .stat { display: flex; justify-content: space-between; font-size: 13px; padding: 3px 0; }
+  .stat span:last-child { font-variant-numeric: tabular-nums; color: var(--muted); }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+  <aside class="sidebar">
+    <h1>cadrop</h1>
+    <div class="sub">sessile-drop contact angle · 接触角测量</div>
+    <div class="upload" id="dropzone">
+      <b>点击或拖拽上传图片</b><br>
+      <span>支持 JPG / PNG / BMP / TIFF，可多选</span>
+      <input type="file" id="fileinput" accept="image/*" multiple>
+    </div>
+    <input class="search" id="search" placeholder="搜索文件名…">
+    <div class="thumbs" id="thumbs">
+      <div class="hint" style="padding:10px 8px">尚未上传图片</div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="topbar">
+      <select id="method">
+        <option value="auto" selected>auto（自动：直线 / 圆）</option>
+        <option value="circle">circle（圆拟合）</option>
+        <option value="ellipse">ellipse（椭圆拟合）</option>
+        <option value="poly">poly（二次切线）</option>
+        <option value="line">line（直线）</option>
+      </select>
+      <label class="chk"><input type="checkbox" id="enhance"> 图像增强</label>
+      <button id="btn-select" class="ghost">✂ 框选液滴区域</button>
+      <button id="btn-clear" class="ghost">清除选区</button>
+      <button id="btn-measure">测量</button>
+      <button id="btn-prev" class="ghost">‹</button>
+      <button id="btn-next" class="ghost">›</button>
+      <button id="btn-runall" class="ghost">批量测量全部</button>
+    </div>
+    <div class="stage">
+      <div class="canvas-wrap" id="wrap">
+        <canvas id="canvas" width="800" height="600"></canvas>
+      </div>
+      <div class="side-panel" id="panel">
+        <div class="section-title">当前结果</div>
+        <div class="big" id="avg">—</div>
+        <div id="meta" class="hint"></div>
+        <div class="grid2">
+          <div class="card"><div class="lbl">左接触角 left</div><div class="val" id="left">—</div></div>
+          <div class="card"><div class="lbl">右接触角 right</div><div class="val" id="right">—</div></div>
+        </div>
+        <div id="details"></div>
+        <div class="section-title">批量统计</div>
+        <div id="stats"></div>
+        <div class="progress"><div id="progress"></div></div>
+        <div id="runmsg" class="hint"></div>
+      </div>
+    </div>
+  </main>
+
+<script>
+const $ = (s) => document.querySelector(s);
+let images = [], currentId = null;
+let baseImg = new Image(), annImg = null;
+let selection = null, selecting = false, selectStart = null;
+let batchResults = [];
+
+async function json(url, opts) { const r = await fetch(url, opts); return r.json(); }
+
+// ------------------------------------------------------------- upload
+const dz = $('#dropzone'), fi = $('#fileinput');
+dz.onclick = () => fi.click();
+fi.onchange = () => { if (fi.files.length) upload(fi.files); fi.value = ''; };
+dz.ondragover = (e) => { e.preventDefault(); dz.classList.add('drag'); };
+dz.ondragleave = () => dz.classList.remove('drag');
+dz.ondrop = (e) => { e.preventDefault(); dz.classList.remove('drag'); upload(e.dataTransfer.files); };
+
+async function upload(files) {
+  const fd = new FormData();
+  let n = 0;
+  for (const f of files) { fd.append('files', f); n++; }
+  if (!n) return;
+  dz.style.opacity = .5;
+  const r = await json('/api/upload', { method: 'POST', body: fd });
+  dz.style.opacity = 1;
+  await loadImages();
+  if (r.added && r.added.length) select(r.added[0].id);
+}
+
+async function loadImages() {
+  images = await json('/api/images');
+  renderThumbs();
+}
+function renderThumbs() {
+  const box = $('#thumbs'); box.innerHTML = '';
+  const q = $('#search').value.toLowerCase();
+  if (!images.length) { box.innerHTML = '<div class="hint" style="padding:10px 8px">尚未上传图片</div>'; return; }
+  for (const im of images) {
+    if (q && !im.name.toLowerCase().includes(q)) continue;
+    const d = document.createElement('div');
+    d.className = 'thumb' + (im.id === currentId ? ' active' : '');
+    d.innerHTML = `<img src="/api/thumb?id=${im.id}" alt="">` +
+                  `<span class="nm" title="${im.name}">${im.name}</span>` +
+                  `<span class="del" data-id="${im.id}">✕</span>`;
+    d.onclick = (e) => {
+      if (e.target.classList.contains('del')) return;
+      select(im.id);
+    };
+    d.querySelector('.del').onclick = async () => {
+      await json('/api/clear_upload', { method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({id: im.id}) });
+      if (im.id === currentId) { currentId = null; clearCanvas(); }
+      loadImages();
+    };
+    box.appendChild(d);
+  }
+}
+$('#search').oninput = renderThumbs;
+
+// ------------------------------------------------------------- selection / canvas
+const canvas = $('#canvas'), ctx = canvas.getContext('2d');
+
+async function select(id) {
+  currentId = id;
+  selection = null; annImg = null;
+  renderThumbs();
+  const d = await json(`/api/image?id=${id}`);
+  if (d.error) return;
+  baseImg = new Image();
+  baseImg.onload = () => {
+    canvas.width = baseImg.naturalWidth;
+    canvas.height = baseImg.naturalHeight;
+    redraw();
+  };
+  baseImg.src = d.url;
+}
+
+function redraw() {
+  const c = canvas, x = c.getContext('2d');
+  x.clearRect(0, 0, c.width, c.height);
+  if (baseImg.src && baseImg.naturalWidth) x.drawImage(baseImg, 0, 0, c.width, c.height);
+  if (annImg && annImg.naturalWidth) x.drawImage(annImg, 0, 0, c.width, c.height);
+  if (selection) drawSelection(x, selection);
+}
+function clearCanvas() { annImg = null; selection = null; canvas.getContext('2d').clearRect(0,0,canvas.width,canvas.height); }
+
+function drawSelection(x, s) {
+  const {x0, y0, x1, y1} = s;
+  const X = Math.min(x0,x1), Y = Math.min(y0,y1), W = Math.abs(x1-x0), H = Math.abs(y1-y0);
+  x.save();
+  x.fillStyle = 'rgba(0,0,0,0.45)';
+  x.fillRect(0, 0, canvas.width, Y);
+  x.fillRect(0, Y, X, H);
+  x.fillRect(X+W, Y, canvas.width-X-W, H);
+  x.fillRect(0, Y+H, canvas.width, canvas.height-Y-H);
+  x.strokeStyle = '#4da3ff'; x.lineWidth = 2; x.setLineDash([7, 4]);
+  x.strokeRect(X, Y, W, H); x.setLineDash([]);
+  x.font = '13px system-ui, sans-serif';
+  const lbl = `${Math.round(W)} × ${Math.round(H)}`;
+  const tw = x.measureText(lbl).width;
+  x.fillStyle = '#4da3ff';
+  x.fillRect(X, Math.max(0, Y - 20), tw + 10, 20);
+  x.fillStyle = '#06111f'; x.fillText(lbl, X + 5, Math.max(0, Y - 20) + 14);
+  x.restore();
+}
+
+function imgCoords(e) {
+  const r = canvas.getBoundingClientRect();
+  return [(e.clientX - r.left) * (canvas.width / r.width),
+          (e.clientY - r.top) * (canvas.height / r.height)];
+}
+canvas.onpointerdown = (e) => {
+  if (!selectMode()) return;
+  selectStart = imgCoords(e); selecting = true; canvas.setPointerCapture(e.pointerId);
+};
+canvas.onpointermove = (e) => {
+  if (!selecting) return;
+  const [x, y] = imgCoords(e);
+  selection = {x0: selectStart[0], y0: selectStart[1], x1: x, y1: y};
+  redraw();
+};
+canvas.onpointerup = (e) => {
+  if (!selecting) return;
+  selecting = false;
+  const [x, y] = imgCoords(e);
+  selection = {x0: selectStart[0], y0: selectStart[1], x1: x, y1: y};
+  const w = Math.abs(selection.x1 - selection.x0), h = Math.abs(selection.y1 - selection.y0);
+  if (w < 8 || h < 8) { selection = null; redraw(); }
+  else redraw();
+};
+function selectMode() { return $('#btn-select').classList.contains('active'); }
+function setSelectMode(on) {
+  $('#btn-select').classList.toggle('active', on);
+  canvas.classList.toggle('selecting', on);
+  if (!on) selecting = false;
+}
+$('#btn-select').onclick = () => setSelectMode(!selectMode());
+$('#btn-clear').onclick = () => { selection = null; redraw(); };
+
+// ------------------------------------------------------------- measure
+async function measure() {
+  if (!currentId) return;
+  const btn = $('#btn-measure'); btn.disabled = true; btn.textContent = '测量中…';
+  try {
+    const body = {id: currentId, method: $('#method').value, use_enhance: $('#enhance').checked};
+    if (selection) {
+      body.region = { x: Math.min(selection.x0, selection.x1), y: Math.min(selection.y0, selection.y1),
+                      w: Math.abs(selection.x1 - selection.x0), h: Math.abs(selection.y1 - selection.y0) };
+    }
+    const r = await json('/api/measure', { method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body) });
+    if (r.error && !r.ok) { annImg = null; $('#avg').textContent = '失败'; $('#meta').innerHTML = `<span class="err-tag">${r.error}</span>`; redraw(); return; }
+    annImg = new Image();
+    annImg.onload = () => redraw();
+    annImg.src = r.annotated;
+    renderResult(r);
+  } finally { btn.disabled = false; btn.textContent = '测量'; }
+}
+function drawUrl(url) {
+  annImg = new Image(); annImg.onload = () => redraw(); annImg.src = url;
+}
+function f(v, d=2) { return v == null ? '—' : Number(v).toFixed(d); }
+function renderResult(r) {
+  if (!r.ok) {
+    $('#avg').textContent = '失败';
+    $('#left').textContent = '—'; $('#right').textContent = '—';
+    $('#meta').innerHTML = `<span class="err-tag">${r.error}</span>`;
+    $('#details').innerHTML = '';
+    return;
+  }
+  $('#avg').textContent = f(r.avg_angle, 2) + '°';
+  const l = r.left, rt = r.right;
+  $('#left').textContent = l.ok ? f(l.angle_deg) + '°' : '—';
+  $('#right').textContent = rt.ok ? f(rt.angle_deg) + '°' : '—';
+  const scope = selection ? '（框选区域）' : '（整图）';
+  $('#meta').innerHTML = `<span class="ok-tag">${r.filename}</span> · ${scope} · ${f(r.elapsed_ms,0)} ms`;
+  $('#details').innerHTML = `
+    <div class="metric"><span>拟合方法 method</span><b>${r.method}</b></div>
+    <div class="metric"><span>左 rms</span><b>${l.ok ? f(l.rms_px,2)+' px' : '—'} (${l.method})</b></div>
+    <div class="metric"><span>右 rms</span><b>${rt.ok ? f(rt.rms_px,2)+' px' : '—'} (${rt.method})</b></div>
+    <div class="metric"><span>左右差 |L−R|</span><b>${f(r.asymmetry,2)}°</b></div>
+    <div class="metric"><span>基底宽度 base width</span><b>${f(r.base_width_px,1)} px</b></div>
+    <div class="metric"><span>液滴高度 height</span><b>${f(r.height_px,1)} px</b></div>
+    <div class="metric"><span>基底倾角 tilt</span><b>${f(r.baseline.tilt_deg,2)}°</b></div>
+    <div class="metric"><span>置信度 confidence</span><b>${f(r.confidence,2)}</b></div>`;
+}
+
+// ------------------------------------------------------------- nav & batch
+function indexOfCurrent() { return images.findIndex(x => x.id === currentId); }
+function step(d) {
+  const i = indexOfCurrent(); if (i < 0) return;
+  const j = Math.max(0, Math.min(images.length - 1, i + d));
+  select(images[j].id);
+}
+$('#btn-prev').onclick = () => step(-1);
+$('#btn-next').onclick = () => step(1);
+$('#btn-measure').onclick = measure;
+$('#method').onchange = measure;
+$('#enhance').onchange = measure;
+
+async function runAll() {
+  if (!images.length) return;
+  const btn = $('#btn-runall'); btn.disabled = true;
+  $('#runmsg').textContent = '批量测量中…（可能需几分钟）';
+  $('#progress').querySelector('div').style.width = '0%';
+  try {
+    const r = await json('/api/run_all', { method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({method: $('#method').value, use_enhance: $('#enhance').checked}) });
+    batchResults = r.results;
+    $('#progress').querySelector('div').style.width = '100%';
+    $('#runmsg').textContent = `完成 ${r.count} 张，失败 ${batchResults.filter(x=>!x.ok).length} 张`;
+    renderStats();
+  } finally { btn.disabled = false; }
+}
+function renderStats() {
+  const ok = batchResults.filter(x => x.ok && x.avg_angle != null).map(x => x.avg_angle);
+  const st = $('#stats');
+  if (!ok.length) { st.innerHTML = '<div class="hint">暂无数据</div>'; return; }
+  ok.sort((a,b)=>a-b);
+  const mean = ok.reduce((a,b)=>a+b,0)/ok.length;
+  const med = ok[Math.floor(ok.length/2)];
+  const q = (p) => ok[Math.min(ok.length-1, Math.floor(p*ok.length))];
+  st.innerHTML = `
+    <div class="stat"><span>张数 n</span><span>${ok.length}</span></div>
+    <div class="stat"><span>均值 mean</span><span>${mean.toFixed(2)}°</span></div>
+    <div class="stat"><span>中位数 median</span><span>${med.toFixed(2)}°</span></div>
+    <div class="stat"><span>标准差 std</span><span>${Math.sqrt(ok.reduce((a,b)=>a+(b-mean)**2,0)/ok.length).toFixed(2)}°</span></div>
+    <div class="stat"><span>范围 range</span><span>${ok[0].toFixed(1)}–${ok[ok.length-1].toFixed(1)}°</span></div>
+    <div class="stat"><span>四分位 IQR</span><span>${q(.25).toFixed(1)}–${q(.75).toFixed(1)}°</span></div>`;
+}
+$('#btn-runall').onclick = runAll;
+
+loadImages();
+</script>
+</body>
+</html>
