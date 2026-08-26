@@ -1,1 +1,0 @@
-We use Opendrop to deal with the pictures.
