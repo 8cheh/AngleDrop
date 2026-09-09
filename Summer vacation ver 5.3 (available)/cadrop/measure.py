@@ -12,6 +12,7 @@ import numpy as np
 from . import fitting as F
 from .detect import drop_mask, enhance, find_substrate, profile_points, read_image
 from .geometry import Line
+from .superres import super_resolve
 
 __all__ = ['SideFit', 'MeasureResult', 'measure', 'measure_roi', 'measure_file', 'METHODS']
 
@@ -193,8 +194,13 @@ def _fit_side(sel: np.ndarray, contact: np.ndarray, base_w: float, side: str,
 
 def measure(bgr: np.ndarray, filename: str = '', *, method: str = 'auto',
             win_frac: float = 0.25, use_enhance: bool = False,
+            use_sr: bool = False, sr_scale: float = 3.0,
             baseline: Optional[Tuple[float, float]] = None) -> MeasureResult:
-    """Measure the contact angle of a single sessile-drop image."""
+    """Measure the contact angle of a single sessile-drop image.
+
+    ``use_sr`` runs Real-ESRGAN super-resolution as the first preprocessing
+    step (before enhancement); ``sr_scale`` is the requested upscale factor.
+    """
     res = MeasureResult(filename=filename, method=method)
     if bgr is None:
         res.error = 'image could not be read'
@@ -202,6 +208,13 @@ def measure(bgr: np.ndarray, filename: str = '', *, method: str = 'auto',
     if method not in METHODS:
         res.error = f'unknown method {method!r}'
         return res
+
+    if use_sr:
+        try:
+            bgr = super_resolve(bgr, scale=sr_scale)
+        except Exception as e:  # model missing / onnxruntime absent -> fail loudly
+            res.error = f'super-resolve failed: {e}'
+            return res
 
     h, w = bgr.shape[:2]
     res.image_size = (int(w), int(h))

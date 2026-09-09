@@ -10,10 +10,12 @@ from .geometry import Line
 from .measure import MeasureResult, SideFit, measure, measure_file, measure_roi, METHODS
 from .detect import detect_baseline, drop_mask, profile_points
 from .render import annotate
+from .superres import super_resolve, available as sr_available
 
 __version__ = '1.0.0'
 
 __all__ = [
     'Line', 'MeasureResult', 'SideFit', 'measure', 'measure_file', 'measure_roi',
     'METHODS', 'detect_baseline', 'drop_mask', 'profile_points', 'annotate',
+    'super_resolve', 'sr_available',
 ]
