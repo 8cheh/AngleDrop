@@ -12,7 +12,7 @@ import numpy as np
 from . import fitting as F
 from .detect import drop_mask, enhance, find_substrate, profile_points, read_image
 from .geometry import Line
-from .superres import super_resolve
+from .superres import upscale_roi
 
 __all__ = ['SideFit', 'MeasureResult', 'measure', 'measure_roi', 'measure_file', 'METHODS']
 
@@ -209,28 +209,53 @@ def measure(bgr: np.ndarray, filename: str = '', *, method: str = 'auto',
         res.error = f'unknown method {method!r}'
         return res
 
+    ln = None
+    mask = None
+    h0, w0 = bgr.shape[:2]
+
     if use_sr:
+        # Locate once on the original image, upscale the drop ROI, then reuse
+        # the (scaled) line + mask for measurement -- no second find_substrate.
+        scale = int(round(sr_scale))
+        gray0 = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+        if baseline is not None:
+            k, b = baseline
+            ln0 = Line(k, b, w0, invert=False)
+            mask0, _ = drop_mask(gray0, ln0)
+        else:
+            found = find_substrate(gray0)
+            if found is None:
+                res.error = 'no drop found'
+                return res
+            ln0, mask0, _, _ = found
+        if mask0 is None:
+            res.error = 'no drop found above the substrate'
+            return res
         try:
-            bgr = super_resolve(bgr, scale=sr_scale)
-        except Exception as e:  # model missing / onnxruntime absent -> fail loudly
+            bgr = upscale_roi(bgr, mask0, scale)
+        except Exception as e:
             res.error = f'super-resolve failed: {e}'
             return res
+        ln = Line(ln0.k, ln0.b * scale, w0 * scale, invert=ln0.invert)
+        mask = cv2.resize(mask0, (w0 * scale, h0 * scale),
+                          interpolation=cv2.INTER_NEAREST)
 
     h, w = bgr.shape[:2]
     res.image_size = (int(w), int(h))
     work = enhance(bgr) if use_enhance else bgr
     gray = cv2.cvtColor(work, cv2.COLOR_BGR2GRAY)
 
-    if baseline is not None:
-        k, b = baseline
-        ln = Line(k, b, w, invert=False)
-        mask, _ = drop_mask(gray, ln)
-    else:
-        found = find_substrate(gray)
-        if found is None:
-            res.error = 'no drop found'
-            return res
-        ln, mask, _, _ = found
+    if ln is None:
+        if baseline is not None:
+            k, b = baseline
+            ln = Line(k, b, w, invert=False)
+            mask, _ = drop_mask(gray, ln)
+        else:
+            found = find_substrate(gray)
+            if found is None:
+                res.error = 'no drop found'
+                return res
+            ln, mask, _, _ = found
     res.baseline_k, res.baseline_b = float(ln.k), float(ln.b)
     res.baseline_tilt_deg = ln.angle_deg
     if mask is None:

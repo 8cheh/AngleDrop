@@ -1,98 +1,130 @@
-"""Optional super-resolution preprocessing via Real-ESRGAN (ONNX + onnxruntime).
+"""Lightweight super-resolution preprocessing via FSRCNN (OpenCV dnn_superres).
 
-Upscales a low-resolution / blurry drop image *before* detection so the profile
-edge carries more detail for the sub-pixel trace and the contact-angle fit.
-This is the "first step" of preprocessing, ahead of :func:`cadrop.detect.enhance`.
+FSRCNN is a small, fast SR network: ~41KB model, roughly 10x faster than
+Real-ESRGAN, landing in the tens-to-hundreds-of-ms range. Reconstruction
+quality is lower than Real-ESRGAN -- that is the trade-off for speed.
 
-The reference model is the Real-ESRGAN "general x4v3" export (community re-host,
-int8-quantized, ~4.9 MB). It upscales natively by 4x; any other requested scale
-is reached by resizing the 4x output.
-
-``onnxruntime`` is an optional dependency -- import this module and call
-:func:`available` to probe whether super-resolution can actually run.
+Super-resolution runs on the *drop ROI only*: the drop is located first, then
+only that patch is fed to the network (the rest of the frame is upscaled by
+fast interpolation), which is what keeps the total time in the ms range.
 """
 from __future__ import annotations
 
 import os
 from functools import lru_cache
-from typing import Optional
+from typing import Optional, Tuple
 
 import cv2
 import numpy as np
 
-try:
-    import onnxruntime as ort
-except ImportError:  # pragma: no cover - onnxruntime is optional
-    ort = None
-
-_MODEL_NAME = 'realesr-general-x4v3.onnx'
-_MODEL_SCALE = 4
-# Real-ESRGAN's pixel-shuffle upsampling needs input dims divisible by 4.
-_PAD_ALIGN = 4
+_MODEL_DIR = os.path.normpath(os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), '..', 'models'))
+_ASCII_DIR = os.path.join(os.environ.get('TEMP', os.path.expanduser('~')), 'fsrcnn_models')
 
 
-def _default_model_path() -> str:
-    here = os.path.dirname(os.path.abspath(__file__))
-    return os.path.normpath(os.path.join(here, '..', 'models', _MODEL_NAME))
+def _model_path(scale: int) -> str:
+    return os.path.join(_MODEL_DIR, f'FSRCNN_x{scale}.pb')
 
 
-@lru_cache(maxsize=1)
-def _session(model_path: str):
-    """Load (and cache) the ONNX session. Cached so batch runs load it once."""
-    if ort is None:
-        return None
-    return ort.InferenceSession(model_path, providers=['CPUExecutionProvider'])
+def _readable_model_path(scale: int) -> str:
+    """Return a path cv2 can open.
+
+    cv2 fails to open absolute paths containing non-ASCII characters on
+    Windows (e.g. a project folder with a Chinese name). If the model path is
+    non-ASCII, copy it into an ASCII temp dir and load from there.
+    """
+    src = _model_path(scale)
+    try:
+        src.encode('ascii')
+        return src
+    except UnicodeEncodeError:
+        pass
+    os.makedirs(_ASCII_DIR, exist_ok=True)
+    dst = os.path.join(_ASCII_DIR, f'FSRCNN_x{scale}.pb')
+    if not os.path.isfile(dst) or os.path.getsize(dst) != os.path.getsize(src):
+        import shutil
+        shutil.copyfile(src, dst)
+    return dst
+
+
+@lru_cache(maxsize=3)
+def _sr(scale: int):
+    """Load (and cache) the FSRCNN upsampler for a given scale factor."""
+    sr = cv2.dnn_superres.DnnSuperResImpl_create()
+    sr.readModel(_readable_model_path(scale))
+    sr.setModel('fsrcnn', scale)
+    return sr
 
 
 def available() -> bool:
-    """Whether super-resolution can run: onnxruntime present + model on disk."""
-    return ort is not None and os.path.isfile(_default_model_path())
+    """Whether FSRCNN super-resolution can run (dnn_superres + model present)."""
+    return hasattr(cv2, 'dnn_superres') and os.path.isfile(_model_path(3))
 
 
-def super_resolve(bgr: np.ndarray, scale: float = 3.0,
-                  model_path: Optional[str] = None) -> np.ndarray:
-    """Upscale a BGR image with Real-ESRGAN and return the upscaled BGR image.
-
-    ``scale`` is the requested factor. The model produces 4x natively; other
-    factors are obtained by resizing the 4x result.
-    """
-    if ort is None:
-        raise RuntimeError('onnxruntime is not installed (pip install onnxruntime)')
-    model_path = model_path or _default_model_path()
-    if not os.path.isfile(model_path):
-        raise FileNotFoundError(f'super-resolution model not found: {model_path}')
-
-    sess = _session(model_path)
-    if sess is None:
-        raise RuntimeError('failed to load super-resolution model')
-
+def _drop_bbox(bgr: np.ndarray, pad: int = 20) -> Optional[Tuple[int, int, int, int]]:
+    """Locate the drop and return its padded bbox (x0, y0, x1, y1), or None."""
+    from .detect import find_substrate
+    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+    found = find_substrate(gray)
+    if found is None:
+        return None
+    _, mask, _, _ = found
+    if mask is None:
+        return None
+    ys, xs = np.where(mask > 0)
+    if xs.size == 0:
+        return None
     h, w = bgr.shape[:2]
-    # Real-ESRGAN expects RGB float32 in [0, 1], NCHW.
-    rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+    x0 = max(0, int(xs.min()) - pad)
+    x1 = min(w, int(xs.max()) + pad)
+    y0 = max(0, int(ys.min()) - pad)
+    y1 = min(h, int(ys.max()) + pad)
+    if x1 - x0 < 30 or y1 - y0 < 30:
+        return None
+    return x0, y0, x1, y1
 
-    pad_h = (-h) % _PAD_ALIGN
-    pad_w = (-w) % _PAD_ALIGN
-    if pad_h or pad_w:
-        rgb = cv2.copyMakeBorder(rgb, 0, pad_h, 0, pad_w, cv2.BORDER_REFLECT)
 
-    x = rgb.transpose(2, 0, 1)[None, ...]  # 1, 3, H, W
-    input_name = sess.get_inputs()[0].name
-    out = sess.run(None, {input_name: x})[0]  # 1, 3, H*4, W*4
+def super_resolve(bgr: np.ndarray, scale: float = 3.0) -> np.ndarray:
+    """Upscale the image by `scale`, running FSRCNN on the drop ROI only.
 
-    up = out[0].transpose(1, 2, 0)           # H*4, W*4, 3 (RGB, float)
-    up = np.clip(up, 0.0, 1.0)
-    up = (up * 255.0 + 0.5).astype(np.uint8)
-    up = cv2.cvtColor(up, cv2.COLOR_RGB2BGR)
+    Falls back to full-frame FSRCNN if the drop can't be located.
+    """
+    scale = int(round(scale))
+    roi = _drop_bbox(bgr)
+    if roi is None:
+        return _sr(scale).upsample(bgr)
 
-    # crop the reflect-padding back off (scaled by the same factor)
-    up_h, up_w = up.shape[:2]
-    crop_h = pad_h * _MODEL_SCALE
-    crop_w = pad_w * _MODEL_SCALE
-    if crop_h or crop_w:
-        up = up[0:up_h - crop_h, 0:up_w - crop_w]
+    x0, y0, x1, y1 = roi
+    h, w = bgr.shape[:2]
+    # fast-interpolate the full frame, then paste the sharp upscaled drop patch
+    full = cv2.resize(bgr, (w * scale, h * scale), interpolation=cv2.INTER_LINEAR)
+    crop = bgr[y0:y1, x0:x1]
+    up = _sr(scale).upsample(crop)
+    full[y0 * scale:y0 * scale + up.shape[0],
+         x0 * scale:x0 * scale + up.shape[1]] = up
+    return full
 
-    if scale != _MODEL_SCALE:
-        th = max(1, int(round(h * scale)))
-        tw = max(1, int(round(w * scale)))
-        up = cv2.resize(up, (tw, th), interpolation=cv2.INTER_LANCZOS4)
-    return up
+
+def upscale_roi(bgr: np.ndarray, mask: np.ndarray, scale: float = 3.0) -> np.ndarray:
+    """Upscale using a *given* drop mask (no re-localisation).
+
+    The full frame is upscaled by fast interpolation; the drop patch, located
+    from `mask`, is upscaled by FSRCNN and pasted back. Used by the measure
+    pipeline so `find_substrate` runs only once and its mask is reused.
+    """
+    scale = int(round(scale))
+    h, w = bgr.shape[:2]
+    ys, xs = np.where(mask > 0)
+    if xs.size == 0:
+        return cv2.resize(bgr, (w * scale, h * scale), interpolation=cv2.INTER_LINEAR)
+    pad = 20
+    x0 = max(0, int(xs.min()) - pad)
+    x1 = min(w, int(xs.max()) + pad)
+    y0 = max(0, int(ys.min()) - pad)
+    y1 = min(h, int(ys.max()) + pad)
+    crop = bgr[y0:y1, x0:x1]
+    up = _sr(scale).upsample(crop)
+    full = cv2.resize(bgr, (w * scale, h * scale), interpolation=cv2.INTER_LINEAR)
+    full[y0 * scale:y0 * scale + up.shape[0],
+         x0 * scale:x0 * scale + up.shape[1]] = up
+    return full
