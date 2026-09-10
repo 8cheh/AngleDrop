@@ -1,0 +1,7 @@
+# Python cache
+__pycache__/
+*.pyc
+
+# super-resolution test outputs
+sr_*.jpg
+comparison.jpg
