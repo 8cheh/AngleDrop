@@ -309,7 +309,7 @@ def locate_drop(bgr: np.ndarray, *, max_cands: int = 8, seed: int = 0) -> Dict:
 
     return {
         'ok': True,
-        'bbox': [int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())],
+        'bbox': [int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1],
         'mask': mask,
         'k': float(k), 'b': float(b), 'invert': bool(invert),
         'score': float(score), 'area': int(mask.sum() // 255),
