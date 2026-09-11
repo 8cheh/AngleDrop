@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pre-process · 超分辨率 + 液滴定位</title>
+<style>
+  :root {
+    --bg: #0f1419; --panel: #1a2027; --panel2: #222a33; --line: #2f3943;
+    --fg: #e6eef5; --muted: #8fa1b0; --accent: #4fa3ff; --ok: #53c27b;
+    --warn: #e0a84f;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+         background: var(--bg); color: var(--fg); }
+  header { padding: 14px 22px; border-bottom: 1px solid var(--line); display: flex;
+           align-items: center; gap: 16px; flex-wrap: wrap; }
+  header h1 { font-size: 18px; margin: 0; font-weight: 600; }
+  header .sub { color: var(--muted); font-size: 12px; }
+  .badge { font-size: 11px; padding: 3px 9px; border-radius: 999px;
+           background: var(--panel2); color: var(--muted); border: 1px solid var(--line); }
+  .badge.ok { color: var(--ok); border-color: var(--ok); }
+  .badge.warn { color: var(--warn); border-color: var(--warn); }
+
+  main { padding: 20px 22px; display: grid; grid-template-columns: 320px 1fr; gap: 20px; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+          padding: 16px; }
+  .card h2 { font-size: 14px; margin: 0 0 12px; }
+
+  .dropzone { border: 2px dashed var(--line); border-radius: 10px; padding: 28px 16px;
+              text-align: center; color: var(--muted); cursor: pointer; transition: .15s; }
+  .dropzone:hover, .dropzone.drag { border-color: var(--accent); color: var(--accent); }
+  .dropzone input { display: none; }
+
+  #imglist { list-style: none; margin: 12px 0 0; padding: 0; max-height: 300px; overflow: auto; }
+  #imglist li { display: flex; align-items: center; gap: 8px; padding: 7px 9px;
+                border-radius: 8px; cursor: pointer; font-size: 13px; }
+  #imglist li:hover { background: var(--panel2); }
+  #imglist li.active { background: var(--panel2); outline: 1px solid var(--accent); }
+  #imglist .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #imglist .x { color: var(--muted); cursor: pointer; padding: 0 4px; }
+  #imglist .x:hover { color: #ff6b6b; }
+
+  .row { display: flex; align-items: center; gap: 8px; margin: 10px 0; font-size: 13px; }
+  .row .val { color: var(--accent); margin-left: auto; }
+  button { background: var(--panel2); color: var(--fg); border: 1px solid var(--line);
+           border-radius: 8px; padding: 8px 10px; font-size: 13px; cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #08131f;
+                   font-weight: 600; width: 100%; margin-top: 14px; }
+  button.ghost { width: 100%; margin-top: 8px; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  input[type=checkbox] { accent-color: var(--accent); width: 16px; height: 16px; }
+
+  .stage-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+                gap: 16px; }
+  .stage { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+           overflow: hidden; }
+  .stage .cap { padding: 10px 12px; display: flex; justify-content: space-between;
+                align-items: center; font-size: 13px; border-bottom: 1px solid var(--line); }
+  .stage .cap .t { font-weight: 600; }
+  .stage .cap .d { color: var(--muted); font-size: 11px; margin-top: 2px; }
+  .stage .cap .idx { background: var(--panel2); border-radius: 999px; padding: 2px 8px;
+                     font-size: 11px; color: var(--muted); white-space: nowrap; }
+  .stage img { display: block; width: 100%; height: auto; background: #000; cursor: zoom-in; }
+  .stage .zoom { color: var(--muted); font-size: 11px; padding: 6px 12px; }
+
+  .info { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+          padding: 14px 16px; margin-bottom: 16px; font-size: 13px; line-height: 1.8; }
+  .info b { color: var(--accent); }
+  .info .err { color: #ff6b6b; }
+
+  .hint { color: var(--muted); font-size: 12px; line-height: 1.7; margin-top: 12px; }
+  #status { margin-top: 12px; font-size: 12px; color: var(--muted); min-height: 18px; }
+  .spin { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--accent);
+          border-top-color: transparent; border-radius: 50%; animation: sp .7s linear infinite;
+          vertical-align: -2px; margin-right: 6px; }
+  @keyframes sp { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<header>
+  <h1>💧 Pre-process · 超分辨率 + 液滴定位</h1>
+  <span class="sub">上传图片 → 超分(可选) → 定位液滴包围盒与基线</span>
+  <span id="srbadge" class="badge">检测中…</span>
+</header>
+
+<main>
+  <aside class="card">
+    <h2>1 · 上传图片</h2>
+    <div class="dropzone" id="dz">
+      <div>点击或拖拽图片到这里</div>
+      <div style="font-size:11px;margin-top:6px">支持 JPG / PNG / BMP / TIFF，可多选</div>
+      <input type="file" id="file" multiple accept=".jpg,.jpeg,.png,.bmp,.tif,.tiff,.webp">
+    </div>
+    <ul id="imglist"></ul>
+    <button class="ghost" id="clearBtn">清空全部</button>
+
+    <h2 style="margin-top:22px">2 · 参数</h2>
+    <div class="row"><input type="checkbox" id="useSr"> <label for="useSr">超分辨率</label>
+      <span class="val" id="srScaleVal">3×</span></div>
+    <div style="margin:4px 0 0 24px">
+      <input type="range" id="srScale" min="2" max="4" step="1" value="3" style="width:100%">
+    </div>
+
+    <button class="primary" id="runBtn" disabled>3 · 运行（超分 + 定位）</button>
+    <div id="status"></div>
+  </aside>
+
+  <section>
+    <div class="info" id="info" style="display:none"></div>
+    <div id="placeholder" class="card hint">
+      还没有运行。请先上传图片，再点「运行」。<br>
+      流程：① 原图 → ② 超分辨率（可选，GitHub 新增的 FSRCNN 预处理）→ ③ 液滴定位（基线 + 包围盒）
+    </div>
+    <div class="stage-grid" id="stages"></div>
+  </section>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+let currentId = null;
+
+// ---- meta ----
+fetch('/api/meta').then(r => r.json()).then(m => {
+  const b = $('#srbadge');
+  if (m.sr_available) { b.textContent = 'FSRCNN 可用'; b.className = 'badge ok'; }
+  else { b.textContent = 'FSRCNN 不可用（走经典回退）'; b.className = 'badge warn'; }
+});
+
+// ---- upload ----
+const dz = $('#dz'), file = $('#file');
+dz.addEventListener('click', () => file.click());
+file.addEventListener('change', () => upload(file.files));
+['dragover','dragenter'].forEach(e => dz.addEventListener(e, ev => { ev.preventDefault(); dz.classList.add('drag'); }));
+['dragleave','drop'].forEach(e => dz.addEventListener(e, ev => { ev.preventDefault(); dz.classList.remove('drag'); }));
+dz.addEventListener('drop', ev => upload(ev.dataTransfer.files));
+
+async function upload(files) {
+  if (!files || !files.length) return;
+  const fd = new FormData();
+  for (const f of files) fd.append('files', f);
+  setStatus('上传中…', true);
+  try {
+    const r = await fetch('/api/upload', { method: 'POST', body: fd });
+    const j = await r.json();
+    setStatus(`已添加 ${j.added.length} 张，共 ${j.total} 张`);
+    // 自动选中第一张新上传的图
+    if (j.added.length && !currentId) currentId = j.added[0].id;
+    await refreshList();
+  } catch (e) { setStatus('上传失败：' + e.message); }
+}
+
+async function refreshList() {
+  const r = await fetch('/api/images');
+  const list = await r.json();
+  if (!list.length) currentId = null;
+  if (currentId && !list.some(it => it.id === currentId)) currentId = list.length ? list[0].id : null;
+  const ul = $('#imglist');
+  ul.innerHTML = '';
+  list.forEach(it => {
+    const li = document.createElement('li');
+    if (it.id === currentId) li.classList.add('active');
+    li.innerHTML = `<span class="nm">${escapeHtml(it.name)}</span><span class="x" title="删除">✕</span>`;
+    li.querySelector('.nm').onclick = () => { currentId = it.id; refreshList(); };
+    li.querySelector('.x').onclick = async (e) => {
+      e.stopPropagation();
+      await fetch('/api/clear_upload', { method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({id: it.id}) });
+      await refreshList();
+    };
+    ul.appendChild(li);
+  });
+  $('#runBtn').disabled = !currentId;
+}
+
+// ---- controls ----
+$('#useSr').onchange = e => {};
+$('#srScale').oninput = e => { $('#srScaleVal').textContent = e.target.value + '×'; };
+$('#clearBtn').onclick = async () => {
+  await fetch('/api/clear', { method: 'POST' });
+  currentId = null;
+  await refreshList();
+  $('#stages').innerHTML = '';
+  $('#info').style.display = 'none';
+  $('#placeholder').style.display = '';
+};
+
+// ---- run ----
+$('#runBtn').onclick = async () => {
+  if (!currentId) { setStatus('请先上传并选中一张图片'); return; }
+  setStatus('预处理中（超分 + 定位）…', true);
+  try {
+    const r = await fetch('/api/process', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ id: currentId, use_sr: $('#useSr').checked,
+        sr_scale: +$('#srScale').value })
+    });
+    const j = await r.json();
+    if (j.error && !j.ok) { setStatus('出错：' + j.error); render(j); return; }
+    render(j);
+    setStatus(`完成 · ${j.stages.length} 个阶段` + (j.sr_active ? '（FSRCNN 已启用）' : ''));
+  } catch (e) { setStatus('请求失败：' + e.message); }
+};
+
+function render(j) {
+  $('#placeholder').style.display = 'none';
+  const info = $('#info');
+  info.style.display = 'block';
+  if (j.ok) {
+    info.innerHTML = `✅ <b>定位成功</b>　包围盒：<b>[${j.bbox[0]}, ${j.bbox[1]}] → [${j.bbox[2]}, ${j.bbox[3]}]</b>　
+      尺寸 <b>${j.bbox[2]-j.bbox[0]} × ${j.bbox[3]-j.bbox[1]}</b> px　面积 <b>${j.area}</b> px²　
+      基线 <b>y = ${j.baseline.k.toFixed(4)}x + ${j.baseline.b.toFixed(1)}</b>
+      ${j.baseline.invert ? '（倒置液滴）' : ''}`;
+  } else {
+    info.innerHTML = `<span class="err">❌ 定位失败：${escapeHtml(j.error || '未找到液滴')}</span>`;
+  }
+  const grid = $('#stages');
+  grid.innerHTML = '';
+  j.stages.forEach((s, i) => {
+    const el = document.createElement('div');
+    el.className = 'stage';
+    el.innerHTML = `<div class="cap"><div><div class="t">${i+1}. ${escapeHtml(s.name)}</div>
+      <div class="d">${escapeHtml(s.desc)}</div></div>
+      <span class="idx">${s.w}×${s.h}</span></div>
+      <img src="${s.url}" alt="${escapeHtml(s.name)}" loading="lazy">
+      <div class="zoom">点击图片放大</div>`;
+    el.querySelector('img').onclick = () => window.open(s.url, '_blank');
+    grid.appendChild(el);
+  });
+}
+
+function setStatus(msg, spin) {
+  $('#status').innerHTML = (spin ? '<span class="spin"></span>' : '') + escapeHtml(msg);
+}
+function escapeHtml(s) { return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+</script>
+</body>
+</html>
