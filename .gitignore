@@ -7,3 +7,6 @@ sr_*.jpg
 comparison.jpg
 All in one/Old versions/Summer vacation ver 5.3 (available)/cadrop/superres.py
 All in one/Old versions/Summer vacation ver 5.3 (available)/compare_sr.py
+
+# FSRCNN model files (local only, not committed)
+Step to step/Pre-process/models/
