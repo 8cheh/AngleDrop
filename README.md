@@ -49,7 +49,7 @@ PY
 
 - 报错 "module 'cv2' has no attribute 'dnn_superres'"：说明当前安装的 opencv 版本不包含 contrib 模块，执行 `pip install opencv-contrib-python`。
 - 模型找不到：确认 models/ 目录存在且模型文件名与代码/UI 中的倍数匹配（FSRCNN_x3.pb 对应 scale=3）。
-- 性能/显存：SR 在较大 ROI 或较高倍数时会占用较多内存，UI 中提供了经典回退以保��能在没有 DNN 硬件下也能处理图像。
+- 性能/显存：SR 在较大 ROI 或较高倍数时会占用较多内存，UI 中提供了经典回退以保证能在没有 DNN 硬件下也能处理图像。
 
 ---
 
