@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>baseline-lemma · 基线识别（多算法模式）</title>
+<style>
+  :root {
+    --bg: #0f1419; --panel: #1a2027; --panel2: #222a33; --line: #2f3943;
+    --fg: #e6eef5; --muted: #8fa1b0; --accent: #4fa3ff; --ok: #53c27b;
+    --warn: #e0a84f;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+         background: var(--bg); color: var(--fg); }
+  header { padding: 14px 22px; border-bottom: 1px solid var(--line); display: flex;
+           align-items: center; gap: 16px; flex-wrap: wrap; }
+  header h1 { font-size: 18px; margin: 0; font-weight: 600; }
+  header .sub { color: var(--muted); font-size: 12px; }
+  .badge { font-size: 11px; padding: 3px 9px; border-radius: 999px;
+           background: var(--panel2); color: var(--muted); border: 1px solid var(--line); }
+  .badge.ok { color: var(--ok); border-color: var(--ok); }
+  .badge.warn { color: var(--warn); border-color: var(--warn); }
+
+  main { padding: 20px 22px; display: grid; grid-template-columns: 340px 1fr; gap: 20px; }
+  @media (max-width: 920px) { main { grid-template-columns: 1fr; } }
+
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+          padding: 16px; }
+  .card h2 { font-size: 14px; margin: 0 0 12px; }
+
+  .dropzone { border: 2px dashed var(--line); border-radius: 10px; padding: 28px 16px;
+              text-align: center; color: var(--muted); cursor: pointer; transition: .15s; }
+  .dropzone:hover, .dropzone.drag { border-color: var(--accent); color: var(--accent); }
+  .dropzone input { display: none; }
+
+  #imglist { list-style: none; margin: 12px 0 0; padding: 0; max-height: 240px; overflow: auto; }
+  #imglist li { display: flex; align-items: center; gap: 8px; padding: 7px 9px;
+                border-radius: 8px; cursor: pointer; font-size: 13px; }
+  #imglist li:hover { background: var(--panel2); }
+  #imglist li.active { background: var(--panel2); outline: 1px solid var(--accent); }
+  #imglist .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #imglist .x { color: var(--muted); cursor: pointer; padding: 0 4px; }
+  #imglist .x:hover { color: #ff6b6b; }
+
+  .row { display: flex; align-items: center; gap: 8px; margin: 10px 0; font-size: 13px; }
+  .row label { white-space: nowrap; }
+  .row .val { color: var(--accent); margin-left: auto; }
+  select { width: 100%; background: var(--panel2); color: var(--fg); border: 1px solid var(--line);
+           border-radius: 8px; padding: 8px 10px; font-size: 13px; }
+  input[type=range] { width: 100%; }
+  button { background: var(--panel2); color: var(--fg); border: 1px solid var(--line);
+           border-radius: 8px; padding: 8px 10px; font-size: 13px; cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #08131f;
+                   font-weight: 600; width: 100%; margin-top: 14px; }
+  button.ghost { width: 100%; margin-top: 8px; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  input[type=checkbox] { accent-color: var(--accent); width: 16px; height: 16px; }
+
+  .stage-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+                gap: 16px; }
+  .stage { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+           overflow: hidden; }
+  .stage .cap { padding: 10px 12px; display: flex; justify-content: space-between;
+                align-items: center; font-size: 13px; border-bottom: 1px solid var(--line); }
+  .stage .cap .t { font-weight: 600; }
+  .stage .cap .d { color: var(--muted); font-size: 11px; margin-top: 2px; }
+  .stage .cap .idx { background: var(--panel2); border-radius: 999px; padding: 2px 8px;
+                     font-size: 11px; color: var(--muted); white-space: nowrap; }
+  .stage img { display: block; width: 100%; height: auto; background: #000; cursor: zoom-in; }
+  .stage .zoom { color: var(--muted); font-size: 11px; padding: 6px 12px; }
+
+  .info { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+          padding: 14px 16px; margin-bottom: 16px; font-size: 13px; line-height: 1.9; }
+  .info b { color: var(--accent); }
+  .info .err { color: #ff6b6b; }
+  .info table { border-collapse: collapse; width: 100%; margin-top: 6px; }
+  .info td, .info th { border: 1px solid var(--line); padding: 6px 10px; font-size: 12px; }
+  .info th { background: var(--panel2); text-align: left; color: var(--muted); font-weight: 500; }
+  .info td.num { font-family: Consolas, monospace; color: var(--accent); }
+
+  .hint { color: var(--muted); font-size: 12px; line-height: 1.7; margin-top: 12px; }
+  #status { margin-top: 12px; font-size: 12px; color: var(--muted); min-height: 18px; }
+  .spin { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--accent);
+          border-top-color: transparent; border-radius: 50%; animation: sp .7s linear infinite;
+          vertical-align: -2px; margin-right: 6px; }
+  @keyframes sp { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<header>
+  <h1>📏 baseline-lemma · 基线识别</h1>
+  <span class="sub">预处理 → 选择基线算法（梯度 / Hough / Otsu / 稳健拟合 / RANSAC / PCA）→ 识别台面基线 y = kx + b</span>
+  <span id="srbadge" class="badge">检测中…</span>
+</header>
+
+<main>
+  <aside class="card">
+    <h2>1 · 上传图片</h2>
+    <div class="dropzone" id="dz">
+      <div>点击或拖拽图片到这里</div>
+      <div style="font-size:11px;margin-top:6px">支持 JPG / PNG / BMP / TIFF，可多选</div>
+      <input type="file" id="file" multiple accept=".jpg,.jpeg,.png,.bmp,.tif,.tiff,.webp">
+    </div>
+    <ul id="imglist"></ul>
+    <button class="ghost" id="clearBtn">清空全部</button>
+
+    <h2 style="margin-top:22px">2 · 预处理</h2>
+    <div class="row"><input type="checkbox" id="useSr"> <label for="useSr">超分辨率</label>
+      <span class="val" id="srScaleVal">3×</span></div>
+    <div style="margin:4px 0 0 24px">
+      <input type="range" id="srScale" min="2" max="4" step="1" value="3">
+    </div>
+
+    <h2 style="margin-top:22px">3 · 基线识别算法</h2>
+    <div class="row"><label for="mode">算法模式</label></div>
+    <select id="mode"></select>
+
+    <div class="row" style="margin-top:14px"><label for="slope">最大斜率</label>
+      <span class="val" id="slopeVal">±11.3°</span></div>
+    <input type="range" id="slope" min="0.05" max="0.5" step="0.01" value="0.2">
+
+    <div class="row" style="margin-top:14px"><label for="band">拟合搜索带</label>
+      <span class="val" id="bandVal">60 px</span></div>
+    <input type="range" id="band" min="20" max="120" step="5" value="60">
+
+    <button class="primary" id="runBtn" disabled>4 · 运行基线识别</button>
+    <div id="status"></div>
+  </aside>
+
+  <section>
+    <div class="info" id="info" style="display:none"></div>
+    <div id="placeholder" class="card hint">
+      还没有运行。请先上传图片，选择基线算法，再点「运行」。<br><br>
+      流程：① 原图 → ② 超分辨率（可选）→ ③ 液滴定位（预处理参考）→
+      ④ 算法证据（候选点 / 行剖面）→ ⑤ 基线识别结果（y = kx + b）。<br><br>
+      不同算法思路不同：<br>
+      · <b>Sobel 行梯度 + RANSAC</b>：行剖面峰值 → 逐列亚像素 → RANSAC，经典稳健；<br>
+      · <b>Hough 直线投票</b>：把近水平边缘段作为“票”，选最长最密的一条；<br>
+      · <b>Otsu 列剖面界面</b>：逐列 Otsu 找亮度两类分界，再拟合直线；<br>
+      · <b>fitLine / RANSAC / PCA</b>：粗定位带内收集边缘点，用不同估计器拟合。
+    </div>
+    <div class="stage-grid" id="stages"></div>
+  </section>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+let currentId = null;
+
+// ---- meta：拉取算法列表与超分状态 ----
+fetch('/api/meta').then(r => r.json()).then(m => {
+  const b = $('#srbadge');
+  if (m.sr_available) { b.textContent = 'FSRCNN 可用'; b.className = 'badge ok'; }
+  else { b.textContent = 'FSRCNN 不可用（经典回退）'; b.className = 'badge warn'; }
+
+  const modeSel = $('#mode');
+  Object.entries(m.modes).forEach(([k, v]) => {
+    const o = document.createElement('option');
+    o.value = k; o.textContent = v;
+    if (k === 'sobel_ransac') o.selected = true;
+    modeSel.appendChild(o);
+  });
+});
+
+// ---- upload ----
+const dz = $('#dz'), file = $('#file');
+dz.addEventListener('click', () => file.click());
+file.addEventListener('change', () => upload(file.files));
+['dragover','dragenter'].forEach(e => dz.addEventListener(e, ev => { ev.preventDefault(); dz.classList.add('drag'); }));
+['dragleave','drop'].forEach(e => dz.addEventListener(e, ev => { ev.preventDefault(); dz.classList.remove('drag'); }));
+dz.addEventListener('drop', ev => upload(ev.dataTransfer.files));
+
+async function upload(files) {
+  if (!files || !files.length) return;
+  const fd = new FormData();
+  for (const f of files) fd.append('files', f);
+  setStatus('上传中…', true);
+  try {
+    const r = await fetch('/api/upload', { method: 'POST', body: fd });
+    const j = await r.json();
+    setStatus(`已添加 ${j.added.length} 张，共 ${j.total} 张`);
+    if (j.added.length && !currentId) currentId = j.added[0].id;
+    await refreshList();
+  } catch (e) { setStatus('上传失败：' + e.message); }
+}
+
+async function refreshList() {
+  const r = await fetch('/api/images');
+  const list = await r.json();
+  if (!list.length) currentId = null;
+  if (currentId && !list.some(it => it.id === currentId)) currentId = list.length ? list[0].id : null;
+  const ul = $('#imglist');
+  ul.innerHTML = '';
+  list.forEach(it => {
+    const li = document.createElement('li');
+    if (it.id === currentId) li.classList.add('active');
+    li.innerHTML = `<span class="nm">${escapeHtml(it.name)}</span><span class="x" title="删除">✕</span>`;
+    li.querySelector('.nm').onclick = () => { currentId = it.id; refreshList(); };
+    li.querySelector('.x').onclick = async (e) => {
+      e.stopPropagation();
+      await fetch('/api/clear_upload', { method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({id: it.id}) });
+      await refreshList();
+    };
+    ul.appendChild(li);
+  });
+  $('#runBtn').disabled = !currentId;
+}
+
+// ---- controls ----
+$('#srScale').oninput = e => { $('#srScaleVal').textContent = e.target.value + '×'; };
+$('#slope').oninput = e => {
+  const deg = Math.atan(+e.target.value) * 180 / Math.PI;
+  $('#slopeVal').textContent = '±' + deg.toFixed(1) + '°';
+};
+$('#band').oninput = e => { $('#bandVal').textContent = e.target.value + ' px'; };
+$('#clearBtn').onclick = async () => {
+  await fetch('/api/clear', { method: 'POST' });
+  currentId = null;
+  await refreshList();
+  $('#stages').innerHTML = '';
+  $('#info').style.display = 'none';
+  $('#placeholder').style.display = '';
+};
+
+// ---- run ----
+$('#runBtn').onclick = async () => {
+  if (!currentId) { setStatus('请先上传并选中一张图片'); return; }
+  setStatus('基线识别中…', true);
+  try {
+    const r = await fetch('/api/process', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ id: currentId, use_sr: $('#useSr').checked,
+        sr_scale: +$('#srScale').value, mode: $('#mode').value,
+        max_slope: +$('#slope').value, band: +$('#band').value })
+    });
+    const j = await r.json();
+    if (j.error && !j.ok) { setStatus('出错：' + j.error); render(j); return; }
+    render(j);
+    setStatus(`完成 · ${j.stages.length} 个阶段 · 算法：${j.mode_label}`);
+  } catch (e) { setStatus('请求失败：' + e.message); }
+};
+
+function render(j) {
+  $('#placeholder').style.display = 'none';
+  const info = $('#info');
+  info.style.display = 'block';
+  if (j.ok) {
+    let refHtml = '—';
+    if (j.reference) {
+      refHtml = `y = ${j.reference.k.toFixed(4)}x + ${j.reference.b.toFixed(2)}`
+        + `（角度差 <b>${j.reference.angle_diff_deg.toFixed(3)}°</b> ·`
+        + ` 中心偏移 <b>${j.reference.offset_px.toFixed(2)}</b> px）`;
+    }
+    info.innerHTML = `
+      ✅ <b>基线识别成功</b>　算法：<b>${escapeHtml(j.mode_label)}</b><br>
+      <table>
+        <tr><th>直线方程</th><td class="num" colspan="3">y = ${j.k.toFixed(4)}x + ${j.b.toFixed(2)}</td></tr>
+        <tr><th>斜率角</th><td class="num">${j.slope_deg.toFixed(3)}°</td>
+            <th>液滴侧</th><td class="num">${j.invert ? '基线下（倒置）' : '基线上（正立）'}</td></tr>
+        <tr><th>RMSE</th><td class="num">${j.rmse == null ? '—' : j.rmse.toFixed(2) + ' px'}</td>
+            <th>置信度 Q</th><td class="num">${j.quality.toFixed(4)}</td></tr>
+        <tr><th>算法得分</th><td class="num">${j.score.toFixed(1)}</td>
+            <th>内点数</th><td class="num">${j.n_inliers} / ${j.n_points}</td></tr>
+      </table>
+      预处理内置基线（参考）：${refHtml}`;
+  } else {
+    info.innerHTML = `<span class="err">❌ 识别失败：${escapeHtml(j.error || '未知错误')}</span>`;
+  }
+  const grid = $('#stages');
+  grid.innerHTML = '';
+  j.stages.forEach((s, i) => {
+    const el = document.createElement('div');
+    el.className = 'stage';
+    el.innerHTML = `<div class="cap"><div><div class="t">${i+1}. ${escapeHtml(s.name)}</div>
+      <div class="d">${escapeHtml(s.desc)}</div></div>
+      <span class="idx">${s.w}×${s.h}</span></div>
+      <img src="${s.url}" alt="${escapeHtml(s.name)}" loading="lazy">
+      <div class="zoom">点击图片放大</div>`;
+    el.querySelector('img').onclick = () => window.open(s.url, '_blank');
+    grid.appendChild(el);
+  });
+}
+
+function setStatus(msg, spin) {
+  $('#status').innerHTML = (spin ? '<span class="spin"></span>' : '') + escapeHtml(msg);
+}
+function escapeHtml(s) { return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+</script>
+</body>
+</html>
