@@ -263,6 +263,61 @@ def _subpix(strength: np.ndarray, cx: int, cy: int, r: int = 2):
     return float((win * xx).sum() / s), float((win * yy).sum() / s)
 
 
+def _contour_contacts(mask: np.ndarray, k: float, b: float, invert: bool,
+                      clearance: float = 3.0, contact_band: float = 10.0):
+    """在掩码外轮廓上找离基线最近的左右接触点（几何交点）。
+
+    比边缘图局部搜索更稳健：直接基于预处理已保证质量的掩码拓扑，
+    不受台面纹理/倒影等假边缘干扰。找不到时返回 None（不硬凑）。
+    """
+    h, w = mask.shape
+    zm = _zmap(k, b, w, h, invert)
+    cnts, _ = cv2.findContours((mask > 0).astype(np.uint8),
+                               cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    if not cnts:
+        return None
+    cnt = max(cnts, key=cv2.contourArea).reshape(-1, 2)
+    xs = cnt[:, 0].astype(np.float64)
+    ys = cnt[:, 1].astype(np.float64)
+    z = zm[np.clip(ys.astype(int), 0, h - 1), np.clip(xs.astype(int), 0, w - 1)]
+
+    # 液滴侧 + 离基线接触带内
+    near = (z > 0) & (z <= clearance + contact_band)
+    if not near.any():
+        near = z > 0          # 退而求其次：所有液滴侧轮廓点
+    if not near.any():
+        return None
+
+    nxs, nys, nz = xs[near], ys[near], z[near]
+    # 底部带：z 在 [zmin, zmin+0.5] 内的点（容忍 float32 噪声 / 像素离散），
+    # 在其中取 x 最小/最大作为左右接触点
+    zmin = float(nz.min())
+    close = nz <= zmin + 0.5
+    cx = nxs[close]
+    cy = nys[close]
+    if cx.size < 2:
+        return None
+    li = int(np.argmin(cx))  # x 最小 → 左接触点
+    ri = int(np.argmax(cx))  # x 最大 → 右接触点
+    if li == ri:
+        return None
+    return (float(cx[li]), float(cy[li])), (float(cx[ri]), float(cy[ri]))
+
+
+def validate_contacts(left: Tuple[float, float], right: Tuple[float, float],
+                      image_w: int, mask_w: float,
+                      min_span_ratio: float = 0.3,
+                      max_span_ratio: float = 0.9) -> Tuple[bool, List[str]]:
+    """校验左右接触点合理性。返回 (ok, warnings)。"""
+    warnings: List[str] = []
+    span = math.hypot(right[0] - left[0], right[1] - left[1])
+    if span <= 1.0:
+        warnings.append('span 过小：左右接触点重合')
+    if span > image_w * max_span_ratio:
+        warnings.append('span 过大：超过图像宽度')
+    return (len(warnings) == 0), warnings
+
+
 # --------------------------------------------------------------------------- #
 # 主流程：接触线检测
 # --------------------------------------------------------------------------- #
@@ -316,22 +371,34 @@ def detect_contact_line(bgr: np.ndarray,
     edge = edge_binary(gray, mode, threshold, mask=focus)
     strength = edge_strength(gray, mode)
 
-    # 3) 粗略接触点（掩码种子）
-    approx = approximate_contacts(mask, k, b, invert, clearance, band=contact_band)
-    if approx is None:
-        return {'ok': False, 'mode': mode, 'error': '无法估计接触点位置'}
-    (lx0, ly0), (rx0, ry0), cx = approx
-
-    # 4) 精细接触点（在模式边缘图上搜索）
-    left_edge, conf_l = _refine_contact(edge, strength, mask, k, b, invert,
-                                        lx0, clearance, contact_band)
-    right_edge, conf_r = _refine_contact(edge, strength, mask, k, b, invert,
-                                         rx0, clearance, contact_band)
+    # 3) 接触点：优先用掩码轮廓几何交点（稳健），找不到再回退边缘图搜索
+    contour_contacts = _contour_contacts(mask, k, b, invert, clearance, contact_band)
+    if contour_contacts is not None:
+        (lcx, lcy), (rcx, rcy) = contour_contacts
+        left_edge = (lcx, lcy)
+        right_edge = (rcx, rcy)
+        conf_l = conf_r = 1.0
+    else:
+        approx = approximate_contacts(mask, k, b, invert, clearance, band=contact_band)
+        if approx is None:
+            return {'ok': False, 'mode': mode, 'error': '无法估计接触点位置'}
+        (lx0, ly0), (rx0, ry0), cx = approx
+        left_edge, conf_l = _refine_contact(edge, strength, mask, k, b, invert,
+                                            lx0, clearance, contact_band)
+        right_edge, conf_r = _refine_contact(edge, strength, mask, k, b, invert,
+                                             rx0, clearance, contact_band)
 
     # 接触点是液滴轮廓与台面基线的交点：x 取轮廓上离基线最近的点，
     # y 落到基线上（三线接触点位于固体表面）。
     left = (left_edge[0], k * left_edge[0] + b)
     right = (right_edge[0], k * right_edge[0] + b)
+
+    # 3.5) 有效性校验：span 不合理时判为失败，而不是硬返回一个错结果
+    m_ys, m_xs = np.where(mask > 0)
+    mask_w = float(m_xs.max() - m_xs.min()) if m_xs.size else 0.0
+    valid, warnings = validate_contacts(left, right, w, mask_w)
+    if not valid:
+        return {'ok': False, 'mode': mode, 'error': '；'.join(warnings)}
 
     # 5) 液滴轮廓弧（液-气界面，排除台面段）
     outline = _extract_outline(edge, mask, zm, side, min_z)
