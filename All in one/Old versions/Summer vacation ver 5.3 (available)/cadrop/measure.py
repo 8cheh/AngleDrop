@@ -18,6 +18,10 @@ __all__ = ['SideFit', 'MeasureResult', 'measure', 'measure_roi', 'measure_file',
 
 METHODS = ('auto', 'circle', 'ellipse', 'poly', 'line')
 
+#: Measurements weaker than this are reported as failures rather than as an
+#: angle, so a bad segmentation cannot masquerade as a result.
+LOW_CONFIDENCE = 0.05
+
 
 @dataclass
 class SideFit:
@@ -192,10 +196,55 @@ def _fit_side(sel: np.ndarray, contact: np.ndarray, base_w: float, side: str,
     return out
 
 
+def _drop_contaminated_base(rz: np.ndarray, tol: float = 0.12,
+                            band_frac: float = 0.25) -> np.ndarray:
+    """Trim profile rows that belong to the stage rather than to the drop.
+
+    The brightest part of the substrate often pokes a few pixels above the
+    fitted baseline and merges with the drop mask. Those rows are far wider
+    than the drop, and because the contact point is taken as the outermost
+    point of the lowest band, they drag both contacts -- and the left/right
+    split, which is a mid-range and so has a breakdown point of zero -- outside
+    the real drop.
+
+    The drop's own width profile is continuous, so the contaminated rows are
+    exactly the ones that break continuity: a sharp widening as z decreases.
+    Only the bottom ``band_frac`` of the drop is examined, because a drop
+    legitimately narrows quickly near its apex.
+    """
+    if rz.shape[1] < 20:
+        return rz
+    lv = np.round(rz[1]).astype(int)
+    levels = np.unique(lv)
+    if levels.size < 8:
+        return rz
+    zmin = float(levels[0])
+    height = float(levels[-1]) - zmin
+    if height <= 0:
+        return rz
+
+    band = levels[levels <= zmin + band_frac * height]
+    if band.size < 5:
+        return rz
+
+    width = np.array([float(rz[0][lv == L].max() - rz[0][lv == L].min())
+                      for L in band])
+    cut = None
+    for i in range(band.size - 1):
+        if width[i] > (1.0 + tol) * width[i + 1]:
+            cut = band[i]
+            break
+    if cut is None:
+        return rz
+    kept = rz[:, lv > cut]
+    return kept if kept.shape[1] >= 20 else rz
+
+
 def measure(bgr: np.ndarray, filename: str = '', *, method: str = 'auto',
             win_frac: float = 0.25, use_enhance: bool = False,
             use_sr: bool = False, sr_scale: float = 3.0,
-            baseline: Optional[Tuple[float, float]] = None) -> MeasureResult:
+            baseline: Optional[Tuple[float, float]] = None,
+            min_confidence: float = LOW_CONFIDENCE) -> MeasureResult:
     """Measure the contact angle of a single sessile-drop image.
 
     ``use_sr`` runs Real-ESRGAN super-resolution as the first preprocessing
@@ -271,6 +320,7 @@ def measure(bgr: np.ndarray, filename: str = '', *, method: str = 'auto',
     if rz.shape[1] < 20:
         res.error = 'drop profile is not above the substrate'
         return res
+    rz = _drop_contaminated_base(rz)
     res.profile_xy = ln.to_xy(rz)
     res.n_profile = int(rz.shape[1])
     res.height_px = float(rz[1].max())
@@ -326,6 +376,16 @@ def measure(bgr: np.ndarray, filename: str = '', *, method: str = 'auto',
     if res.asymmetry is not None:
         conf *= math.exp(-res.asymmetry / 25.0)
     res.confidence = float(max(0.0, min(1.0, conf)))
+
+    # A measurement this weak is not a measurement. Without this gate the
+    # pipeline happily returned ok=True on a completely mis-segmented frame
+    # (the shipped example image used to score 0.026 while reporting a
+    # plausible-looking 106/91 deg), which is how a wrong number ends up in a
+    # batch CSV unnoticed. Failing loudly is the safer default; callers that
+    # really want the raw numbers can pass min_confidence=0.
+    if res.confidence < min_confidence:
+        res.ok = False
+        res.error = (f'low confidence ({res.confidence:.3f} < {min_confidence:.3f})')
     return res
 
 

@@ -136,13 +136,59 @@ def detect_baseline(gray: np.ndarray, *, max_cands: int = 8,
 
 
 # ----------------------------------------------------------------- segmentation
+def _grad_magnitude(gray: np.ndarray) -> np.ndarray:
+    """Gradient magnitude, smoothed just enough to be a stable edge measure."""
+    g = cv2.GaussianBlur(gray.astype(np.float32), (0, 0), 1.2)
+    gx = cv2.Sobel(g, cv2.CV_32F, 1, 0, ksize=3)
+    gy = cv2.Sobel(g, cv2.CV_32F, 0, 1, ksize=3)
+    return cv2.magnitude(gx, gy)
+
+
+def _edge_reference(mag: np.ndarray) -> float:
+    """Typical strength of a genuine edge in this frame.
+
+    Used to turn the raw boundary gradient into a dimensionless 0..1 quality,
+    so the segmentation score does not inherit the exposure of the image.
+    """
+    return max(1e-6, float(np.percentile(mag, 99)))
+
+
+def _blob_quality(comp: np.ndarray, mag: np.ndarray, ref: float) -> Tuple[float, float]:
+    """Convexity and boundary-edge strength of one candidate blob.
+
+    A sessile drop is a convex body bounded by a real optical interface, so it
+    is both compact (solidity close to 1) and outlined by a strong edge. The
+    background texture that a brightness-only score happily accepts is neither:
+    on the shipped example image the true drop scores solidity 0.79 / boundary
+    gradient 161 while the texture blob that used to win scores 0.49 / 16.
+    """
+    m8 = comp.astype(np.uint8)
+    cnts, _ = cv2.findContours(m8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    if not cnts:
+        return 0.0, 0.0
+    c = max(cnts, key=cv2.contourArea)
+    hull = cv2.contourArea(cv2.convexHull(c))
+    area = float(comp.sum())
+    solidity = area / hull if hull > 1e-9 else 0.0
+
+    er = cv2.erode(m8, np.ones((3, 3), np.uint8))
+    boundary = (m8 > 0) & (er == 0)
+    bgrad = float(mag[boundary].mean()) if boundary.any() else 0.0
+    return solidity, min(1.0, bgrad / ref)
+
+
 def _segment(gray: np.ndarray, line: Line, clearance: float = 3.0,
-             min_area: int = 400):
+             min_area: int = 400, ref_grad: Optional[float] = None,
+             mag: Optional[np.ndarray] = None):
     """Segment the drop sitting on `line`. Returns (mask, polarity, score)."""
     h, w = gray.shape
     g = cv2.GaussianBlur(gray, (5, 5), 0)
     zmap = line.z_map((h, w))
     inside = zmap > clearance
+
+    if ref_grad is None or mag is None:
+        mag = _grad_magnitude(gray) if mag is None else mag
+        ref_grad = _edge_reference(mag) if ref_grad is None else ref_grad
 
     vals = g[inside]
     if vals.size < 500:
@@ -179,9 +225,15 @@ def _segment(gray: np.ndarray, line: Line, clearance: float = 3.0,
             xx0, xx1 = max(0, x0), min(w, x0 + bw)
             if zmap[yy0:yy1, xx0:xx1][(lab[yy0:yy1, xx0:xx1] == i)].min() > clearance + 4.0:
                 continue
-            # compact, centred blobs score better than full-width stage slivers
+            # A drop is a compact, convex blob outlined by a strong edge.
+            # Scoring on area alone (the previous behaviour) lets a large
+            # low-contrast background region outrank the actual drop, which is
+            # how the shipped example image used to be measured completely
+            # wrong while still reporting ok=True.
+            solidity, edge_q = _blob_quality(lab == i, mag, ref_grad)
             ar = bw / max(bh, 1)
-            score = float(area) / (1.0 + max(0.0, ar - 2.0))
+            score = float(area) * solidity * edge_q
+            score /= (1.0 + max(0.0, ar - 2.0))
             score *= 1.0 - min(1.0, max(0.0, (bw - 0.7 * w) / (0.3 * w)))
             if best is None or score > best[0]:
                 best = (score, (lab == i).astype(np.uint8) * 255, polarity)
@@ -204,6 +256,9 @@ def find_substrate(gray: np.ndarray, *, max_cands: int = 8, seed: int = 0):
     g = gray if gray.ndim == 2 else cv2.cvtColor(gray, cv2.COLOR_BGR2GRAY)
     h, w = g.shape
     sob = cv2.Sobel(cv2.GaussianBlur(g, (5, 5), 0), cv2.CV_32F, 0, 1, ksize=5)
+    # computed once and shared by every candidate: it is a per-frame constant
+    mag = _grad_magnitude(g)
+    ref_grad = _edge_reference(mag)
     best = None
     for row in _candidate_rows(g, max_cands):
         for polarity in (+1, -1):
@@ -215,7 +270,7 @@ def find_substrate(gray: np.ndarray, *, max_cands: int = 8, seed: int = 0):
                 line = Line(k, b, w, invert=(polarity < 0))
             except ValueError:
                 continue
-            mask, mpol, score = _segment(g, line)
+            mask, mpol, score = _segment(g, line, ref_grad=ref_grad, mag=mag)
             if mask is None:
                 continue
             if best is None or score > best[0]:
@@ -223,7 +278,7 @@ def find_substrate(gray: np.ndarray, *, max_cands: int = 8, seed: int = 0):
     if best is None:
         k, b = detect_baseline(g, max_cands=max_cands, seed=seed)
         line = Line(k, b, w, invert=False)
-        mask, mpol, _ = _segment(g, line)
+        mask, mpol, _ = _segment(g, line, ref_grad=ref_grad, mag=mag)
         if mask is None:
             return None
         best = (0.0, line, mask, mpol)
