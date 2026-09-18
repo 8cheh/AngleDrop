@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>UI and output · 完整接触角流水线</title>
+<style>
+  :root {
+    --bg: #0f1419; --panel: #1a2027; --panel2: #222a33; --line: #2f3943;
+    --fg: #e6eef5; --muted: #8fa1b0; --accent: #4fa3ff; --ok: #53c27b;
+    --warn: #e0a84f; --step1: #7c9cff; --step2: #ff9d5c; --step3: #5cc8ff;
+    --step4: #53c27b;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+         background: var(--bg); color: var(--fg); }
+  header { padding: 14px 22px; border-bottom: 1px solid var(--line); display: flex;
+           align-items: center; gap: 16px; flex-wrap: wrap; position: sticky; top: 0;
+           background: var(--bg); z-index: 5; }
+  header h1 { font-size: 18px; margin: 0; font-weight: 600; }
+  header .sub { color: var(--muted); font-size: 12px; }
+  .badge { font-size: 11px; padding: 3px 9px; border-radius: 999px;
+           background: var(--panel2); color: var(--muted); border: 1px solid var(--line); }
+  .badge.ok { color: var(--ok); border-color: var(--ok); }
+  .badge.warn { color: var(--warn); border-color: var(--warn); }
+
+  main { padding: 20px 22px; display: grid; grid-template-columns: 370px 1fr; gap: 20px;
+         align-items: start; }
+  @media (max-width: 1040px) { main { grid-template-columns: 1fr; } }
+
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+          padding: 16px; }
+  .card h2 { font-size: 14px; margin: 0 0 12px; display: flex; align-items: center; gap: 8px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+
+  .dropzone { border: 2px dashed var(--line); border-radius: 10px; padding: 22px 14px;
+              text-align: center; color: var(--muted); cursor: pointer; transition: .15s; }
+  .dropzone:hover, .dropzone.drag { border-color: var(--accent); color: var(--accent); }
+  .dropzone input { display: none; }
+
+  #imglist { list-style: none; margin: 10px 0 0; padding: 0; max-height: 170px; overflow: auto; }
+  #imglist li { display: flex; align-items: center; gap: 8px; padding: 6px 9px;
+                border-radius: 8px; cursor: pointer; font-size: 13px; }
+  #imglist li:hover { background: var(--panel2); }
+  #imglist li.active { background: var(--panel2); outline: 1px solid var(--accent); }
+  #imglist .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #imglist .x { color: var(--muted); cursor: pointer; padding: 0 4px; }
+  #imglist .x:hover { color: #ff6b6b; }
+
+  .row { display: flex; align-items: center; gap: 8px; margin: 9px 0; font-size: 13px; }
+  .row label { white-space: nowrap; }
+  .row .val { color: var(--accent); margin-left: auto; font-family: Consolas, monospace; }
+  select { width: 100%; background: var(--panel2); color: var(--fg); border: 1px solid var(--line);
+           border-radius: 8px; padding: 8px 10px; font-size: 13px; }
+  input[type=range] { width: 100%; }
+  button { background: var(--panel2); color: var(--fg); border: 1px solid var(--line);
+           border-radius: 8px; padding: 8px 10px; font-size: 13px; cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #08131f;
+                   font-weight: 600; width: 100%; margin-top: 14px; }
+  button.ghost { width: 100%; margin-top: 8px; }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  input[type=checkbox] { accent-color: var(--accent); width: 16px; height: 16px; }
+
+  .steps-control { border-left: 3px solid var(--line); padding-left: 12px; margin: 16px 0 0; }
+  .steps-control.s1 { border-color: var(--step1); }
+  .steps-control.s2 { border-color: var(--step2); }
+  .steps-control.s3 { border-color: var(--step3); }
+  .steps-control.s4 { border-color: var(--step4); }
+
+  .tabs { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+  .tabs button { padding: 6px 12px; font-size: 12px; }
+  .tabs button.active { background: var(--accent); border-color: var(--accent); color: #08131f;
+                        font-weight: 600; }
+
+  .summary { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+             padding: 16px; margin-bottom: 16px; }
+  .summary h2 { margin: 0 0 10px; font-size: 15px; }
+  .big { font-size: 40px; font-weight: 700; color: var(--ok); font-family: Consolas, monospace;
+         line-height: 1.1; }
+  .big small { font-size: 14px; color: var(--muted); font-weight: 400; }
+  .pipeline { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 14px; }
+  @media (max-width: 700px) { .pipeline { grid-template-columns: 1fr 1fr; } }
+  .pstep { background: var(--panel2); border-radius: 10px; padding: 10px 12px; font-size: 12px;
+           border-left: 3px solid var(--line); line-height: 1.65; }
+  .pstep.s1 { border-color: var(--step1); } .pstep.s2 { border-color: var(--step2); }
+  .pstep.s3 { border-color: var(--step3); } .pstep.s4 { border-color: var(--step4); }
+  .pstep .k { color: var(--muted); font-size: 11px; }
+  .pstep .v { font-family: Consolas, monospace; color: var(--fg); }
+  .pstep .fail { color: #ff6b6b; }
+  .pstep .pass { color: var(--ok); }
+
+  table { border-collapse: collapse; width: 100%; margin-top: 6px; }
+  td, th { border: 1px solid var(--line); padding: 6px 10px; font-size: 12px; }
+  th { background: var(--panel2); text-align: left; color: var(--muted); font-weight: 500; }
+  td.num { font-family: Consolas, monospace; color: var(--accent); }
+  tr.best td { background: rgba(83,194,123,.14); }
+  .cmp-fail { color: #ff6b6b; }
+
+  .stage-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
+                gap: 16px; }
+  .stage { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+           overflow: hidden; }
+  .stage .cap { padding: 9px 12px; display: flex; justify-content: space-between;
+                align-items: center; font-size: 13px; border-bottom: 1px solid var(--line); }
+  .stage .cap .t { font-weight: 600; }
+  .stage .cap .d { color: var(--muted); font-size: 11px; margin-top: 2px; }
+  .stage .cap .idx { background: var(--panel2); border-radius: 999px; padding: 2px 8px;
+                     font-size: 11px; color: var(--muted); white-space: nowrap; }
+  .stage img { display: block; width: 100%; height: auto; background: #000; cursor: zoom-in; }
+  .stage .zoom { color: var(--muted); font-size: 11px; padding: 5px 12px; }
+  .stage .sbadge { font-size: 10px; padding: 1px 7px; border-radius: 999px; margin-right: 6px; }
+  .sbadge.s1 { background: rgba(124,156,255,.2); color: var(--step1); }
+  .sbadge.s2 { background: rgba(255,157,92,.2); color: var(--step2); }
+  .sbadge.s3 { background: rgba(92,200,255,.2); color: var(--step3); }
+  .sbadge.s4 { background: rgba(83,194,123,.2); color: var(--step4); }
+
+  .hint { color: var(--muted); font-size: 12px; line-height: 1.75; }
+  #status { margin-top: 12px; font-size: 12px; color: var(--muted); min-height: 18px; }
+  .spin { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--accent);
+          border-top-color: transparent; border-radius: 50%; animation: sp .7s linear infinite;
+          vertical-align: -2px; margin-right: 6px; }
+  @keyframes sp { to { transform: rotate(360deg); } }
+  a.dl { display: block; text-align: center; text-decoration: none; margin-top: 8px;
+         background: var(--panel2); border: 1px solid var(--line); border-radius: 8px;
+         padding: 8px; font-size: 13px; color: var(--fg); }
+  a.dl:hover { border-color: var(--accent); color: var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <h1>🧪 UI and output · 完整接触角流水线</h1>
+  <span class="sub">每一步都可自选方法：预处理 → 基线识别 → 接触线 → 接触角 → 导出</span>
+  <span id="srbadge" class="badge">检测中…</span>
+</header>
+
+<main>
+  <!-- ============ 左侧：分步配置 ============ -->
+  <aside class="card">
+    <h2>📁 图片</h2>
+    <div class="dropzone" id="dz">
+      <div>点击或拖拽图片到这里</div>
+      <div style="font-size:11px;margin-top:6px">支持 JPG / PNG / BMP / TIFF，可多选</div>
+      <input type="file" id="file" multiple accept=".jpg,.jpeg,.png,.bmp,.tif,.tiff,.webp">
+    </div>
+    <ul id="imglist"></ul>
+    <button class="ghost" id="clearBtn">清空全部</button>
+
+    <div class="steps-control s1">
+      <h2><span class="dot" style="background:var(--step1)"></span>① 预处理</h2>
+      <div class="row"><input type="checkbox" id="useSr"> <label for="useSr">超分辨率</label>
+        <span class="val" id="srScaleVal">3×</span></div>
+      <input type="range" id="srScale" min="2" max="4" step="1" value="3"
+             style="margin-left:24px;width:calc(100% - 24px)">
+    </div>
+
+    <div class="steps-control s2">
+      <h2><span class="dot" style="background:var(--step2)"></span>② 台面基线识别</h2>
+      <select id="baselineMode">
+        <option value="preprocess">预处理内置基线（不单独识别）</option>
+        {% for k, v in baseline_modes.items() %}<option value="{{k}}">{{v}}</option>{% endfor %}
+      </select>
+      <div class="row" style="margin-top:12px"><label for="slope">最大斜率</label>
+        <span class="val" id="slopeVal">±11.3°</span></div>
+      <input type="range" id="slope" min="0.05" max="0.5" step="0.01" value="0.2">
+      <div class="row"><label for="band">拟合搜索带</label>
+        <span class="val" id="bandVal">60 px</span></div>
+      <input type="range" id="band" min="20" max="120" step="5" value="60">
+    </div>
+
+    <div class="steps-control s3">
+      <h2><span class="dot" style="background:var(--step3)"></span>③ 接触线 / 接触点</h2>
+      <div class="row"><label for="edgeMode">边缘算法</label></div>
+      <select id="edgeMode">
+        {% for k, v in edge_modes.items() %}<option value="{{k}}">{{v}}</option>{% endfor %}
+      </select>
+      <div class="row" style="margin-top:10px"><label for="threshold">阈值方式</label></div>
+      <select id="threshold">
+        {% for k, v in thresholds.items() %}<option value="{{k}}">{{v}}</option>{% endfor %}
+      </select>
+      <div class="row" style="margin-top:10px"><label for="cband">接触点搜索带</label>
+        <span class="val" id="cbandVal">10 px</span></div>
+      <input type="range" id="cband" min="3" max="30" step="1" value="10">
+    </div>
+
+    <div class="steps-control s4">
+      <h2><span class="dot" style="background:var(--step4)"></span>④ 接触角拟合</h2>
+      <select id="angleMethod">
+        {% for k, v in angle_methods.items() %}<option value="{{k}}"
+          {% if k == 'young_laplace' %}selected{% endif %}>{{v}}</option>{% endfor %}
+      </select>
+      <div class="row" style="margin-top:12px"><label for="win">局部窗口</label>
+        <span class="val" id="winVal">0.25 × 底宽</span></div>
+      <input type="range" id="win" min="0.08" max="0.6" step="0.01" value="0.25">
+      <div class="row"><input type="checkbox" id="compare" checked>
+        <label for="compare">对比所有拟合方法</label></div>
+    </div>
+
+    <button class="primary" id="runBtn" disabled>▶ 运行完整流水线</button>
+    <button class="ghost" id="batchBtn" disabled>📦 批量跑全部图片 → CSV</button>
+    <div id="status" style="margin-bottom:14px"></div>
+
+    <a class="dl" id="dlJson" style="display:none" href="#">⬇ 导出结果 JSON</a>
+    <a class="dl" id="dlCsv" style="display:none" href="#">⬇ 导出结果 CSV</a>
+    <a class="dl" id="dlImg" style="display:none" href="#">⬇ 下载标注图 PNG</a>
+  </aside>
+
+  <!-- ============ 右侧：结果 ============ -->
+  <section>
+    <div id="placeholder" class="card hint">
+      <b>使用说明</b><br>
+      1. 上传一张或多张液滴图片，选中其中一张；<br>
+      2. 在左侧逐层选择每一步的方法（每一层都可以换算法）；<br>
+      3. 点「运行完整流水线」，右侧会按步骤展示每个阶段的图像与数值；<br>
+      4. 「对比所有拟合方法」会额外给出 Young–Laplace / 圆 / 椭圆 / 多项式 /
+         样条 / 直线 等模型的角度对比表；<br>
+      5. 结果可导出为 JSON / CSV，标注图可下载 PNG；「批量跑全部图片」会
+         用当前方法处理所有已上传图片并汇总成 CSV。<br><br>
+      <b>流水线</b>：① Pre-process（超分 + 定位）→ ② baseline-lemma（6 种基线算法）
+      → ③ Sobel-lemma（6 种边缘 × 3 种阈值）→ ④ Y-L and other methods（9 种拟合模型）。
+    </div>
+    <div id="summary" style="display:none"></div>
+    <div class="tabs" id="tabs" style="display:none">
+      <button data-f="all" class="active">全部阶段</button>
+      <button data-f="1">① 预处理</button>
+      <button data-f="2">② 基线</button>
+      <button data-f="3">③ 接触线</button>
+      <button data-f="4">④ 接触角</button>
+    </div>
+    <div class="stage-grid" id="stages"></div>
+  </section>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+let currentId = null;
+let allStages = [];
+let filter = 'all';
+
+// meta
+fetch('/api/meta').then(r => r.json()).then(m => {
+  const b = $('#srbadge');
+  if (m.sr_available) { b.textContent = 'FSRCNN 可用'; b.className = 'badge ok'; }
+  else { b.textContent = 'FSRCNN 不可用（经典回退）'; b.className = 'badge warn'; }
+});
+
+// upload
+const dz = $('#dz'), file = $('#file');
+dz.addEventListener('click', () => file.click());
+file.addEventListener('change', () => upload(file.files));
+['dragover','dragenter'].forEach(e => dz.addEventListener(e, ev => { ev.preventDefault(); dz.classList.add('drag'); }));
+['dragleave','drop'].forEach(e => dz.addEventListener(e, ev => { ev.preventDefault(); dz.classList.remove('drag'); }));
+dz.addEventListener('drop', ev => upload(ev.dataTransfer.files));
+
+async function upload(files) {
+  if (!files || !files.length) return;
+  const fd = new FormData();
+  for (const f of files) fd.append('files', f);
+  setStatus('上传中…', true);
+  try {
+    const r = await fetch('/api/upload', { method: 'POST', body: fd });
+    const j = await r.json();
+    setStatus(`已添加 ${j.added.length} 张，共 ${j.total} 张`);
+    if (j.added.length && !currentId) currentId = j.added[0].id;
+    await refreshList();
+  } catch (e) { setStatus('上传失败：' + e.message); }
+}
+
+async function refreshList() {
+  const list = await (await fetch('/api/images')).json();
+  if (!list.length) currentId = null;
+  if (currentId && !list.some(it => it.id === currentId)) currentId = list.length ? list[0].id : null;
+  const ul = $('#imglist'); ul.innerHTML = '';
+  list.forEach(it => {
+    const li = document.createElement('li');
+    if (it.id === currentId) li.classList.add('active');
+    li.innerHTML = `<span class="nm">${it.has_result ? '✅ ' : ''}${escapeHtml(it.name)}</span><span class="x" title="删除">✕</span>`;
+    li.querySelector('.nm').onclick = () => { currentId = it.id; refreshList(); };
+    li.querySelector('.x').onclick = async (e) => {
+      e.stopPropagation();
+      await fetch('/api/clear_upload', { method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({id: it.id}) });
+      await refreshList();
+    };
+    ul.appendChild(li);
+  });
+  $('#runBtn').disabled = !currentId;
+  $('#batchBtn').disabled = list.length === 0;
+}
+
+$('#srScale').oninput = e => { $('#srScaleVal').textContent = e.target.value + '×'; };
+$('#slope').oninput = e => { $('#slopeVal').textContent = '±' + (Math.atan(+e.target.value)*180/Math.PI).toFixed(1) + '°'; };
+$('#band').oninput = e => { $('#bandVal').textContent = e.target.value + ' px'; };
+$('#cband').oninput = e => { $('#cbandVal').textContent = e.target.value + ' px'; };
+$('#win').oninput = e => { $('#winVal').textContent = (+e.target.value).toFixed(2) + ' × 底宽'; };
+
+$('#clearBtn').onclick = async () => {
+  await fetch('/api/clear', { method: 'POST' });
+  currentId = null; await refreshList();
+  allStages = []; $('#stages').innerHTML = ''; $('#summary').style.display = 'none';
+  $('#tabs').style.display = 'none'; $('#placeholder').style.display = '';
+  ['#dlJson','#dlCsv','#dlImg'].forEach(s => $(s).style.display = 'none');
+};
+
+function cfg() {
+  return {
+    use_sr: $('#useSr').checked, sr_scale: +$('#srScale').value,
+    baseline_mode: $('#baselineMode').value, max_slope: +$('#slope').value,
+    band: +$('#band').value, edge_mode: $('#edgeMode').value,
+    threshold: $('#threshold').value, contact_band: +$('#cband').value,
+    angle_method: $('#angleMethod').value, window_frac: +$('#win').value,
+    compare: $('#compare').checked,
+  };
+}
+
+$('#runBtn').onclick = async () => {
+  if (!currentId) { setStatus('请先上传并选中一张图片'); return; }
+  setStatus('运行完整流水线…', true);
+  try {
+    const r = await fetch('/api/process', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ id: currentId, ...cfg() })
+    });
+    const j = await r.json();
+    if (j.error && !j.ok) { setStatus('出错：' + j.error); render(j); return; }
+    render(j);
+    setStatus(`完成 · 用时 ${j.elapsed}s · ${j.stages.length} 个阶段`);
+    await refreshList();
+  } catch (e) { setStatus('请求失败：' + e.message); }
+};
+
+$('#batchBtn').onclick = async () => {
+  setStatus('批量处理中…（图片较多时请耐心等待）', true);
+  try {
+    const r = await fetch('/api/batch', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(cfg())
+    });
+    const j = await r.json();
+    if (j.error) { setStatus('批量出错：' + j.error); return; }
+    downloadText('batch_result.csv', j.csv, 'text/csv');
+    const okN = (j.summary || []).filter(s => s.ok).length;
+    setStatus(`批量完成：${okN}/${j.count} 成功，CSV 已下载`);
+    await refreshList();
+  } catch (e) { setStatus('批量失败：' + e.message); }
+};
+
+function render(j) {
+  $('#placeholder').style.display = 'none';
+  allStages = j.stages || [];
+  renderSummary(j);
+  filter = 'all';
+  document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('active', b.dataset.f === 'all'));
+  $('#tabs').style.display = 'flex';
+  renderStages();
+
+  const uid = currentId;
+  const show = j.ok;
+  [['#dlJson', `/api/export?id=${uid}&fmt=json`],
+   ['#dlCsv', `/api/export?id=${uid}&fmt=csv`],
+   ['#dlImg', `/api/export_image?id=${uid}`]].forEach(([s, href]) => {
+    $(s).style.display = show ? 'block' : 'none';
+    $(s).href = href;
+  });
+}
+
+function stepCard(cls, title, ok, rows) {
+  const body = rows.map(([k, v]) =>
+    `<div><span class="k">${k}</span> <span class="v">${v}</span></div>`).join('');
+  return `<div class="pstep ${cls}"><div><b>${title}</b>
+    <span class="${ok ? 'pass' : 'fail'}">${ok ? '✓' : '✗'}</span></div>${body}</div>`;
+}
+
+function renderSummary(j) {
+  const pre = j.preprocess || {}, base = j.baseline || {}, con = j.contact || {}, ang = j.angle || {};
+  const wrap = $('#summary');
+  wrap.style.display = 'block';
+  let head = '';
+  if (j.ok) {
+    head = `<div class="big">${ang.avg_angle.toFixed(2)}°<small> 平均接触角</small></div>
+      <div class="hint">左 ${num(ang.left)}° · 右 ${num(ang.right)}° ·
+        不对称 ${num(ang.asymmetry)}° · 置信度 ${ang.confidence != null ? ang.confidence.toFixed(3) : '—'} ·
+        拟合模型 <b>${escapeHtml(ang.method_label || '')}</b></div>`;
+  } else {
+    head = `<div class="big" style="color:#ff6b6b">失败<small> ${escapeHtml(j.error || '')}</small></div>`;
+  }
+
+  const p1 = stepCard('s1', '① 预处理', !!pre.ok, [
+    ['超分', pre.sr_active ? 'FSRCNN' : (j.config.use_sr ? '经典回退' : '关闭')],
+    ['包围盒', pre.bbox ? pre.bbox.join(', ') : '—'],
+    ['面积', pre.area != null ? pre.area + ' px²' : '—'],
+  ]);
+  const p2 = stepCard('s2', '② 基线识别', !!base.ok, [
+    ['算法', escapeHtml(base.mode_label || '')],
+    ['方程', base.k != null ? `y=${(+base.k).toFixed(4)}x+${(+base.b).toFixed(1)}` : '—'],
+    ['RMSE', base.rmse != null ? (+base.rmse).toFixed(2) + ' px' : '—'],
+    ['内点', base.n_inliers != null ? base.n_inliers : '—'],
+  ]);
+  const p3 = stepCard('s3', '③ 接触线', !!con.ok, [
+    ['边缘', escapeHtml(con.mode_label || '')],
+    ['阈值', escapeHtml(con.threshold || '')],
+    ['跨度', con.span != null ? (+con.span).toFixed(1) + ' px' : '—'],
+    ['弧长', con.arc_length != null ? (+con.arc_length).toFixed(1) + ' px' : '—'],
+  ]);
+  const p4 = stepCard('s4', '④ 接触角', !!ang.ok, [
+    ['模型', escapeHtml(ang.method_label || '')],
+    ['平均', num(ang.avg_angle) + '°'],
+    ['底宽/高', `${num(ang.base_width, 1)} / ${num(ang.height, 1)} px`],
+    ['点数', `${ang.left_points ?? '—'} / ${ang.right_points ?? '—'}`],
+  ]);
+
+  let extra = '';
+  if (ang.yl) {
+    extra += `<div class="hint" style="margin-top:10px">Y-L 参数：
+      b=${fmt(ang.yl.b_left)} λ=${fmt(ang.yl.lam_left)}（左） ·
+      b=${fmt(ang.yl.b_right)} λ=${fmt(ang.yl.lam_right)}（右）</div>`;
+  }
+  if (base.reference) {
+    extra += `<div class="hint">与预处理内置基线偏差：
+      角度 ${fmt(base.reference.angle_diff_deg, 3)}° · 中心 ${fmt(base.reference.offset_px, 2)} px</div>`;
+  }
+  if (ang.comparison && ang.comparison.length) {
+    const rows = ang.comparison.map(c => {
+      const best = c.method === ang.method ? ' class="best"' : '';
+      return `<tr${best}><td>${escapeHtml(c.label)}</td>
+        <td class="num">${num(c.left)}</td><td class="num">${num(c.right)}</td>
+        <td class="num ${c.ok ? '' : 'cmp-fail'}">${num(c.avg)}</td>
+        <td class="num">${c.rms_px == null ? '—' : (+c.rms_px).toFixed(2)}</td></tr>`;
+    }).join('');
+    extra += `<div style="margin-top:12px"><b style="font-size:13px">④ 各拟合模型对比</b>
+      （绿底为本次采用）<table>
+      <tr><th>模型</th><th>左 (°)</th><th>右 (°)</th><th>平均 (°)</th><th>RMS (px)</th></tr>
+      ${rows}</table></div>`;
+  }
+  wrap.innerHTML = `<div class="summary"><h2>结果总览</h2>${head}
+    <div class="pipeline">${p1}${p2}${p3}${p4}</div>${extra}</div>`;
+}
+
+function renderStages() {
+  const grid = $('#stages');
+  grid.innerHTML = '';
+  allStages.filter(s => filter === 'all' || String(s.step) === filter).forEach((s, i) => {
+    const el = document.createElement('div');
+    el.className = 'stage';
+    el.innerHTML = `<div class="cap"><div>
+        <div class="t"><span class="sbadge s${s.step}">步骤 ${s.step}</span>${escapeHtml(s.name)}</div>
+        <div class="d">${escapeHtml(s.desc)}</div></div>
+        <span class="idx">${s.w}×${s.h}</span></div>
+      <img src="${s.url}" loading="lazy">
+      <div class="zoom">点击图片放大</div>`;
+    el.querySelector('img').onclick = () => window.open(s.url, '_blank');
+    grid.appendChild(el);
+  });
+}
+
+document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => {
+  filter = b.dataset.f;
+  document.querySelectorAll('#tabs button').forEach(x => x.classList.toggle('active', x === b));
+  renderStages();
+});
+
+function downloadText(name, text, mime) {
+  const blob = new Blob([text], { type: mime + ';charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+}
+const num = (v, d = 2) => (v == null ? '—' : (+v).toFixed(d));
+const fmt = (v, d = 3) => (v == null ? '—' : (+v).toFixed(d));
+function setStatus(msg, spin) {
+  $('#status').innerHTML = (spin ? '<span class="spin"></span>' : '') + escapeHtml(msg);
+}
+function escapeHtml(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+</script>
+</body>
+</html>
