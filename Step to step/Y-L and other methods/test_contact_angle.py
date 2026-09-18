@@ -68,6 +68,15 @@ def _synth_yl(b: float, lam: float, W=900, H=700):
     return img, loc, true_ang
 
 
+def test_ellipse_recovers_circle_angle():
+    # 带噪声的圆（theta=90 球冠）上，椭圆拟合应退化为圆，接触角≈90（而非偏心椭圆）
+    img, loc = _synth_cap(90.0)
+    res = ca.detect_contact_angle(img, loc, None, method='ellipse')
+    assert res['ok'], res.get('error')
+    err = abs(res['avg_angle'] - 90.0)
+    assert err < 4.0, f'椭圆拟合在圆上偏差过大: avg={res["avg_angle"]:.2f} (误差 {err:.2f}°)'
+
+
 def test_cap_methods():
     print('== 球冠 theta=90 ==')
     img, loc = _synth_cap(90.0)

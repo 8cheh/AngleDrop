@@ -22,7 +22,7 @@
     young_laplace    Young–Laplace 双参数（顶点曲率 R0 + 毛细常数 β，含重力项）
     young_laplace_cap Young–Laplace 单参数（β=0，退化为球冠）
     circle           圆拟合（Kasa 代数初值 + 几何距离 Gauss–Newton 精修）
-    ellipse          椭圆（Halir–Flusser 直接最小二乘拟合）
+    ellipse          椭圆（Taubin/AMS 拟合）
     poly2            二次多项式切线 r = f(z)
     poly3            三次多项式切线
     spline           三次平滑样条切线
@@ -64,7 +64,7 @@ ANGLE_METHODS = {
     'young_laplace': 'Young–Laplace 双参数（含重力项 / ADSA）',
     'young_laplace_cap': 'Young–Laplace 单参数（球冠极限）',
     'circle': '圆拟合（Kasa + 几何精修）',
-    'ellipse': '椭圆（Halir–Flusser 直接拟合）',
+    'ellipse': '椭圆（Taubin/AMS 拟合）',
     'poly2': '二次多项式切线',
     'poly3': '三次多项式切线',
     'spline': '三次平滑样条切线',
@@ -255,35 +255,35 @@ def circle_contact(rc: float, zc: float, R: float, side: str,
 
 
 # --------------------------------------------------------------------------- #
-# 几何模型 2：椭圆 / 一般二次曲线（Halir–Flusser 直接拟合）
+# 几何模型 2：椭圆 / 一般二次曲线（Taubin/AMS 拟合）
 # --------------------------------------------------------------------------- #
 def fit_ellipse(r: np.ndarray, z: np.ndarray) -> Optional[np.ndarray]:
-    """直接最小二乘椭圆拟合，返回二次曲线系数 (A,B,C,D,E,F)。"""
+    """椭圆拟合（OpenCV Taubin/AMS 实现），返回二次曲线系数 (A,B,C,D,E,F)。
+
+    用 cv2.fitEllipseAMS（Taubin 几何距离拟合，对噪声更稳健），再把
+    center/axes/rotation 转成一般二次曲线系数，供 conic_contact 使用。
+    """
     r = np.asarray(r, dtype=np.float64)
     z = np.asarray(z, dtype=np.float64)
-    if r.size < 6:
+    if r.size < 5:
         return None
-    D1 = np.column_stack([r * r, r * z, z * z])
-    D2 = np.column_stack([r, z, np.ones_like(r)])
-    S1 = D1.T @ D1
-    S2 = D1.T @ D2
-    S3 = D2.T @ D2
+    pts = np.stack([r, z], axis=1).astype(np.float32)
     try:
-        T = -np.linalg.solve(S3, S2.T)
-    except np.linalg.LinAlgError:
+        (cx, cy), (w, h), ang = cv2.fitEllipseAMS(pts)
+    except cv2.error:
         return None
-    M = S1 + S2 @ T
-    M = np.vstack([M[2, :] / 2.0, -M[1, :], M[0, :] / 2.0])
-    try:
-        ev, evec = np.linalg.eig(M)
-    except np.linalg.LinAlgError:
+    a, b = float(w) / 2.0, float(h) / 2.0
+    if a < 1e-9 or b < 1e-9:
         return None
-    cond = 4.0 * evec[0, :] * evec[2, :] - evec[1, :] ** 2
-    ok = np.where((cond > 0) & np.isfinite(ev))[0]
-    if ok.size == 0:
-        return None
-    a1 = np.real(evec[:, ok[0]])
-    co = np.concatenate([a1, T @ a1])
+    th = math.radians(ang)
+    cos, sin = math.cos(th), math.sin(th)
+    A = cos * cos / (a * a) + sin * sin / (b * b)
+    B = 2.0 * sin * cos * (1.0 / (a * a) - 1.0 / (b * b))
+    C = sin * sin / (a * a) + cos * cos / (b * b)
+    D = -2.0 * A * cx - B * cy
+    E = -B * cx - 2.0 * C * cy
+    F = A * cx * cx + B * cx * cy + C * cy * cy - 1.0
+    co = np.array([A, B, C, D, E, F])
     return co if np.all(np.isfinite(co)) else None
 
 
